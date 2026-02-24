@@ -15,6 +15,7 @@ pub enum TestBlock {
     Cobweb,    // Cross(4) — diagonal billboard, stretched
     Ladder,    // Facade(PosX) — flat face on +X side
     Rail,      // Facade(NegY) — flat face on bottom
+    Cactus,    // Inset(1) — horizontal faces inset by 1/16
 }
 
 impl Block for TestBlock {
@@ -32,6 +33,7 @@ impl Block for TestBlock {
             TestBlock::Cobweb => Shape::Cross(4),
             TestBlock::Ladder => Shape::Facade(Face::PosX),
             TestBlock::Rail => Shape::Facade(Face::NegY),
+            TestBlock::Cactus => Shape::Inset(1),
             _ => Shape::WholeBlock,
         }
     }
@@ -45,7 +47,7 @@ impl Block for TestBlock {
             | TestBlock::Cobweb
             | TestBlock::Ladder
             | TestBlock::Rail => CullMode::TransparentUnmerged,
-            _ => CullMode::Opaque,
+            _ => CullMode::Opaque, // Stone, Dirt, Cactus
         }
     }
 }

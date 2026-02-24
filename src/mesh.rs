@@ -238,6 +238,8 @@ fn neighbor_covers_face_region<B: Block>(block: &B, neighbor: &B, face: Face) ->
         Shape::WholeBlock => true,
         // Cross and facade blocks never cover any face region.
         Shape::Cross(_) | Shape::Facade(_) => false,
+        // Inset blocks cover top/bottom (flush) but not sides (recessed).
+        Shape::Inset(_) => face.axis() == Axis::Y,
         Shape::Slab(n_info) => {
             // The neighbor slab is flush against our face on this boundary
             // only if its slab face equals our face's opposite.
@@ -300,8 +302,29 @@ fn mask_entry_for_shape<B: Block>(
                 v_intra_extent: ft,
             });
         }
-        Shape::WholeBlock => {
-            let normal_pos = if face.is_positive() { ft } else { 0 };
+        Shape::WholeBlock | Shape::Inset(_) => {
+            let normal_pos = if let Shape::Inset(n) = block.shape() {
+                // Side faces are inset; top/bottom are flush.
+                if face.axis() == Axis::Y {
+                    if face.is_positive() {
+                        ft
+                    } else {
+                        0
+                    }
+                } else {
+                    if face.is_positive() {
+                        ft - n as u8
+                    } else {
+                        n as u8
+                    }
+                }
+            } else {
+                if face.is_positive() {
+                    ft
+                } else {
+                    0
+                }
+            };
             Some(MaskEntry {
                 block: *block,
                 normal_pos,
@@ -374,7 +397,7 @@ fn compute_slab_mask_entry<B: Block>(
 ) -> Option<MaskEntry<B>> {
     let info = match block.shape() {
         Shape::Slab(info) => info,
-        Shape::WholeBlock | Shape::Cross(_) | Shape::Facade(_) => unreachable!(),
+        Shape::WholeBlock | Shape::Cross(_) | Shape::Facade(_) | Shape::Inset(_) => unreachable!(),
     };
 
     // For the flush face of the slab along its own axis, check neighbor culling.
@@ -624,6 +647,18 @@ pub fn greedy_mesh_into<B: Block>(chunk: &PaddedChunk<B>, quads: &mut Quads) {
                         // Facade quads are offset 1/16 inward, never at the
                         // block boundary, so skip neighbor culling entirely.
                         mask_entry_for_shape(block, face, u_idx, v_idx)
+                    } else if matches!(block.shape(), Shape::Inset(_)) {
+                        if face.axis() == Axis::Y {
+                            // Top/bottom at boundary — normal culling.
+                            if is_culled_at_boundary(block, neighbor, face) {
+                                None
+                            } else {
+                                mask_entry_for_shape(block, face, u_idx, v_idx)
+                            }
+                        } else {
+                            // Side faces inset — no neighbor culling.
+                            mask_entry_for_shape(block, face, u_idx, v_idx)
+                        }
                     } else {
                         compute_slab_mask_entry(block, neighbor, face, u_idx, v_idx)
                     };

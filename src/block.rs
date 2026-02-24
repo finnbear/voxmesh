@@ -51,6 +51,9 @@ pub enum Shape {
     /// Flat zero-thickness face hugging one side of the block, offset
     /// 1/16th inward. Rendered double-sided (e.g. ladders, rails).
     Facade(Face),
+    /// Block with 4 horizontal faces inset by `n` sixteenths. Top/bottom
+    /// are flush. Each side face is still full block size (e.g. cactus).
+    Inset(Thickness),
 }
 
 pub trait Block: Copy + PartialEq + Debug {

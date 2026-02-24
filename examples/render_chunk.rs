@@ -38,6 +38,7 @@ enum MyBlock {
     Ladder,    // Facade(PosX) — flat face on +X side
     Rail,      // Facade(NegY) — flat face on bottom
     Debug,     // WholeBlock with UV debug texture
+    Cactus,    // Inset(1) — horizontal faces inset by 1/16
 }
 
 impl Block for MyBlock {
@@ -51,6 +52,7 @@ impl Block for MyBlock {
             MyBlock::Cobweb => Shape::Cross(4),
             MyBlock::Ladder => Shape::Facade(Face::PosX),
             MyBlock::Rail => Shape::Facade(Face::NegY),
+            MyBlock::Cactus => Shape::Inset(1),
             _ => Shape::WholeBlock,
         }
     }
@@ -61,13 +63,14 @@ impl Block for MyBlock {
             MyBlock::Cobblestone | MyBlock::Clay | MyBlock::CobbleSlab | MyBlock::Debug => {
                 CullMode::Opaque
             }
-            MyBlock::Glass => CullMode::TransparentMerged,
-            MyBlock::Leaves
+            MyBlock::Glass
+            | MyBlock::Cactus
             | MyBlock::SugarCane
             | MyBlock::Cobweb
             | MyBlock::Shrub
             | MyBlock::Ladder
-            | MyBlock::Rail => CullMode::TransparentUnmerged,
+            | MyBlock::Rail => CullMode::TransparentMerged,
+            MyBlock::Leaves => CullMode::TransparentUnmerged,
         }
     }
 }
@@ -99,6 +102,9 @@ fn build_atlas() -> Buffer2d<Rgba<f32>> {
         "examples/ladder.png",
         "examples/rail_straight.png",
         "examples/debug.png",
+        "examples/cactus_side.png",
+        "examples/cactus_top.png",
+        "examples/cactus_bottom.png",
     ]
     .iter()
     .map(|p| load_tile(p))
@@ -117,8 +123,8 @@ fn build_atlas() -> Buffer2d<Rgba<f32>> {
     atlas
 }
 
-/// Returns the U offset (0..4) into the atlas strip for a given block.
-fn atlas_u_offset(block: MyBlock) -> f32 {
+/// Returns the U offset (0..N) into the atlas strip for a given block/face.
+fn atlas_u_offset(block: MyBlock, face: QuadFace) -> f32 {
     match block {
         MyBlock::Cobblestone | MyBlock::CobbleSlab => 0.0,
         MyBlock::Clay => 1.0,
@@ -130,6 +136,11 @@ fn atlas_u_offset(block: MyBlock) -> f32 {
         MyBlock::Ladder => 7.0,
         MyBlock::Rail => 8.0,
         MyBlock::Debug => 9.0,
+        MyBlock::Cactus => match face {
+            QuadFace::Aligned(Face::PosY) => 11.0,
+            QuadFace::Aligned(Face::NegY) => 12.0,
+            _ => 10.0, // side faces
+        },
         MyBlock::Air => 0.0,
     }
 }
@@ -143,8 +154,10 @@ struct Vertex {
     pos: Vec4<f32>,
     uv: Vec2<f32>,
     normal: Vec3<f32>,
-    // Which block produced this quad (used for atlas lookup).
+    // Which block produced this quad (used for render pass filtering).
     block: MyBlock,
+    // Pre-computed atlas tile offset for this face.
+    atlas_offset: f32,
     // Whether this vertex belongs to a two-sided quad (diagonals, facades).
     two_sided: bool,
 }
@@ -220,7 +233,7 @@ impl<'r, 'a: 'r> Pipeline<'r> for ChunkPipeline<'a> {
             VsOut {
                 uv: v.uv,
                 normal: v.normal,
-                atlas_u_offset: atlas_u_offset(v.block),
+                atlas_u_offset: v.atlas_offset,
             },
         )
     }
@@ -302,6 +315,13 @@ fn build_chunk() -> PaddedChunk<MyBlock> {
         chunk.set(sx, 1, sz, MyBlock::Shrub);
     }
 
+    // Cactus pillars (3 blocks tall).
+    for &(cx, cz) in &[(4, 1), (10, 10)] {
+        for y in 1..4 {
+            chunk.set(cx, y, cz, MyBlock::Cactus);
+        }
+    }
+
     // Ladders on the +X face of clay pillars.
     for y in 1..6 {
         chunk.set(3, y, 2, MyBlock::Ladder);
@@ -365,11 +385,13 @@ fn quads_to_vertices(quads: &Quads, chunk: &PaddedChunk<MyBlock>) -> Vec<Vertex>
 
             // Two triangles per quad: (0,1,2) and (0,2,3).
             let two_sided = qf.is_diagonal() || matches!(block.shape(), Shape::Facade(_));
+            let atlas_off = atlas_u_offset(block, qf);
             let make_vert = |i: usize| Vertex {
                 pos: Vec4::new(positions[i].x, positions[i].y, positions[i].z, 1.0),
                 uv: Vec2::new(uvs[i].x, uvs[i].y),
                 normal,
                 block,
+                atlas_offset: atlas_off,
                 two_sided,
             };
 
@@ -448,7 +470,11 @@ fn main() {
             !v.two_sided
                 && matches!(
                     v.block,
-                    MyBlock::Cobblestone | MyBlock::CobbleSlab | MyBlock::Clay | MyBlock::Debug
+                    MyBlock::Cobblestone
+                        | MyBlock::CobbleSlab
+                        | MyBlock::Clay
+                        | MyBlock::Debug
+                        | MyBlock::Cactus
                 )
         })
         .collect();
