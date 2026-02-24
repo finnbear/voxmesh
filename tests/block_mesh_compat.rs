@@ -1,5 +1,7 @@
 mod common;
 
+use glam::Vec3;
+
 use common::TestBlock;
 use voxmesh::*;
 
@@ -44,6 +46,99 @@ fn bm_face_index_to_face(i: usize) -> Face {
         4 => Face::PosY,
         5 => Face::PosZ,
         _ => unreachable!(),
+    }
+}
+
+/// Compare indices for a single opaque block at (0,0,0) between voxmesh and
+/// block-mesh. Both should produce triangles with the same winding when the
+/// vertices are matched by world-position.
+#[test]
+fn single_block_indices_match_block_mesh() {
+    let config = &RIGHT_HANDED_Y_UP_CONFIG;
+
+    // -- Run block-mesh ---------------------------------------------------
+    let mut bm_voxels = [BmVoxel::Air; PaddedShape::SIZE as usize];
+    let idx = PaddedShape::linearize([1, 1, 1]) as usize;
+    bm_voxels[idx] = BmVoxel::Stone;
+
+    let mut buffer = GreedyQuadsBuffer::new(bm_voxels.len());
+    greedy_quads(
+        &bm_voxels,
+        &PaddedShape {},
+        [0; 3],
+        [17; 3],
+        &config.faces,
+        &mut buffer,
+    );
+
+    // -- Run voxmesh ------------------------------------------------------
+    let vm_quads = common::mesh_single(TestBlock::Stone);
+
+    // -- Compare per face -------------------------------------------------
+    for (bm_face_idx, bm_face_quads) in buffer.quads.groups.iter().enumerate() {
+        let face = bm_face_index_to_face(bm_face_idx);
+        let oriented_face = &config.faces[bm_face_idx];
+
+        let bm_quad = &bm_face_quads[0];
+        let vm_quad = &vm_quads.faces[face.index()][0];
+
+        // block-mesh positions (subtract 1 for padding offset).
+        let bm_positions: [Vec3; 4] = oriented_face
+            .quad_mesh_positions(bm_quad, 1.0)
+            .map(|p| Vec3::new(p[0] - 1.0, p[1] - 1.0, p[2] - 1.0));
+
+        // voxmesh positions.
+        let vm_positions = vm_quad.positions(face);
+
+        // Build a mapping: for each block-mesh vertex index, find the
+        // matching voxmesh vertex index (by position).
+        let bm_to_vm: [usize; 4] = std::array::from_fn(|bm_i| {
+            vm_positions
+                .iter()
+                .position(|vp| (*vp - bm_positions[bm_i]).length() < 1e-6)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "face {face:?}: block-mesh vertex {bm_i} at {:?} \
+                         not found in voxmesh positions {vm_positions:?}",
+                        bm_positions[bm_i]
+                    )
+                })
+        });
+
+        // block-mesh indices (rebased to 0).
+        let bm_indices = oriented_face.quad_mesh_indices(0);
+
+        // voxmesh indices (rebased to 0).
+        let vm_indices = Quad::indices(0);
+
+        // Remap block-mesh indices into voxmesh vertex space.
+        let bm_indices_in_vm: [u32; 6] = bm_indices.map(|i| bm_to_vm[i as usize] as u32);
+
+        // Both sets of indices should form triangles with the same winding.
+        // Compare triangle normals (cross products).
+        for tri in 0..2 {
+            let base = tri * 3;
+            let bm_tri = [
+                vm_positions[bm_indices_in_vm[base] as usize],
+                vm_positions[bm_indices_in_vm[base + 1] as usize],
+                vm_positions[bm_indices_in_vm[base + 2] as usize],
+            ];
+            let vm_tri = [
+                vm_positions[vm_indices[base] as usize],
+                vm_positions[vm_indices[base + 1] as usize],
+                vm_positions[vm_indices[base + 2] as usize],
+            ];
+
+            let bm_normal = (bm_tri[1] - bm_tri[0]).cross(bm_tri[2] - bm_tri[0]);
+            let vm_normal = (vm_tri[1] - vm_tri[0]).cross(vm_tri[2] - vm_tri[0]);
+
+            assert!(
+                bm_normal.dot(vm_normal) > 0.0,
+                "face {face:?}, triangle {tri}: winding mismatch.\n\
+                 block-mesh tri (in vm space): {bm_tri:?} → normal {bm_normal:?}\n\
+                 voxmesh tri: {vm_tri:?} → normal {vm_normal:?}",
+            );
+        }
     }
 }
 

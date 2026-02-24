@@ -157,6 +157,21 @@ impl Quad {
         [p0, p1, p2, p3]
     }
 
+    /// Returns the 6 vertex indices for this quad (two triangles), suitable for
+    /// indexed drawing.
+    ///
+    /// `start` is the index of the first vertex of this quad in the vertex
+    /// buffer. The returned indices reference vertices in the order produced by
+    /// [`positions`](Self::positions) or
+    /// [`diagonal_positions`](Self::diagonal_positions), which is always
+    /// counter-clockwise when viewed from outside.
+    ///
+    /// The winding is compatible with block-mesh-rs's `quad_mesh_indices`.
+    #[inline]
+    pub fn indices(start: u32) -> [u32; 6] {
+        [start, start + 1, start + 2, start, start + 2, start + 3]
+    }
+
     /// Texture coordinates for a diagonal quad. UVs span [0, u_size] × [0, v_size]
     /// where u_size = 1 (one block wide) and v_size = height in blocks.
     pub fn diagonal_texture_coordinates(&self) -> [Vec2; 4] {
