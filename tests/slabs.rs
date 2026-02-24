@@ -70,3 +70,35 @@ fn slab_inset_face_never_culled() {
     });
     assert!(has_inset, "slab inset NegY face should be present at y=0.5");
 }
+
+/// Stacked lower-slabs must not merge their side faces along the slab axis.
+/// Each slab only occupies the bottom half of its cell, so merging would
+/// produce a quad that incorrectly spans the empty upper halves.
+#[test]
+fn stacked_lower_slabs_side_faces_not_merged_vertically() {
+    let q = mesh_with(&[
+        (0, 0, 0, TestBlock::LowerSlab),
+        (0, 1, 0, TestBlock::LowerSlab),
+    ]);
+
+    // Each slab should produce its own PosX side face (2 quads, not 1).
+    let side_quads = &q.faces[Face::PosX.index()];
+    assert_eq!(
+        side_quads.len(),
+        2,
+        "two stacked lower-slabs should have 2 separate PosX side quads, got {}",
+        side_quads.len(),
+    );
+
+    // Each side quad should span only half a block in Y.
+    for quad in side_quads {
+        let verts = quad.positions(Face::PosX);
+        let y_min = verts.iter().map(|v| v.y).fold(f32::INFINITY, f32::min);
+        let y_max = verts.iter().map(|v| v.y).fold(f32::NEG_INFINITY, f32::max);
+        let height = y_max - y_min;
+        assert!(
+            (height - 0.5).abs() < 1e-6,
+            "each slab side quad should be 0.5 tall, got {height}",
+        );
+    }
+}

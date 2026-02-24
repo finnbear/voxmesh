@@ -8,7 +8,7 @@ use block_mesh::{
     GreedyQuadsBuffer, MergeVoxel, RIGHT_HANDED_Y_UP_CONFIG, Voxel, VoxelVisibility, greedy_quads,
 };
 use ndshape::{ConstShape, ConstShape3u32};
-use voxmesh::{*, greedy_mesh_into};
+use voxmesh::{greedy_mesh_into, *};
 
 // ---------------------------------------------------------------------------
 // voxmesh block type
@@ -158,7 +158,14 @@ fn bench_block_mesh(b: &mut Bencher, voxels: &[BmVoxel; BmPaddedShape::SIZE as u
     let mut buffer = GreedyQuadsBuffer::new(voxels.len());
     b.iter(|| {
         buffer.reset(voxels.len());
-        greedy_quads(voxels, &BmPaddedShape {}, [0; 3], [17; 3], faces, &mut buffer);
+        greedy_quads(
+            voxels,
+            &BmPaddedShape {},
+            [0; 3],
+            [17; 3],
+            faces,
+            &mut buffer,
+        );
         test::black_box(&buffer);
     });
 }

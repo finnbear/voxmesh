@@ -210,12 +210,7 @@ impl<'r, 'a: 'r> Pipeline<'r> for ChunkPipeline<'a> {
         let ambient = 0.35;
         let shade = ambient + (1.0 - ambient) * ndotl;
 
-        Rgba::new(
-            texel.r * shade,
-            texel.g * shade,
-            texel.b * shade,
-            texel.a,
-        )
+        Rgba::new(texel.r * shade, texel.g * shade, texel.b * shade, texel.a)
     }
 
     fn blend(&self, old: Self::Pixel, new: Self::Fragment) -> Self::Pixel {
@@ -249,7 +244,7 @@ fn build_chunk() -> PaddedChunk<MyBlock> {
     let pillars = [(2, 2), (2, 13), (13, 2), (13, 13)];
     for &(px, pz) in &pillars {
         for y in 1..6 {
-            chunk.set(px, y, pz, MyBlock::Clay);
+            chunk.set(px, y, pz, MyBlock::CobbleSlab);
         }
     }
 
@@ -366,26 +361,24 @@ fn main() {
         let r = (0.45 + 0.35 * t).min(1.0);
         let g = (0.60 + 0.30 * t).min(1.0);
         let b = (0.85 + 0.10 * t).min(1.0);
-        let pixel = u32::from_le_bytes([
-            (b * 255.0) as u8,
-            (g * 255.0) as u8,
-            (r * 255.0) as u8,
-            255,
-        ]);
+        let pixel =
+            u32::from_le_bytes([(b * 255.0) as u8, (g * 255.0) as u8, (r * 255.0) as u8, 255]);
         for x in 0..w {
             color.write(x, y, pixel);
         }
     }
 
-    let pipeline = ChunkPipeline {
-        mvp,
-        atlas: &atlas,
-    };
+    let pipeline = ChunkPipeline { mvp, atlas: &atlas };
 
     // Render opaque geometry first.
     let opaque_verts: Vec<&Vertex> = vertices
         .iter()
-        .filter(|v| matches!(v.block, MyBlock::Cobblestone | MyBlock::CobbleSlab | MyBlock::Clay))
+        .filter(|v| {
+            matches!(
+                v.block,
+                MyBlock::Cobblestone | MyBlock::CobbleSlab | MyBlock::Clay
+            )
+        })
         .collect();
     if !opaque_verts.is_empty() {
         pipeline.render(opaque_verts.iter().map(|v| *v), &mut color, &mut depth);
@@ -397,11 +390,7 @@ fn main() {
         .filter(|v| matches!(v.block, MyBlock::Glass | MyBlock::Leaves))
         .collect();
     if !transparent_verts.is_empty() {
-        pipeline.render(
-            transparent_verts.iter().map(|v| *v),
-            &mut color,
-            &mut depth,
-        );
+        pipeline.render(transparent_verts.iter().map(|v| *v), &mut color, &mut depth);
     }
 
     // Write output.

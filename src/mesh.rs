@@ -1,7 +1,7 @@
 use glam::{UVec2, UVec3, Vec2, Vec3};
 
 use crate::block::{Block, CullMode, FULL_THICKNESS, Shape};
-use crate::chunk::{CHUNK_SIZE, PADDING, PaddedChunk};
+use crate::chunk::{CHUNK_SIZE, PADDED, PADDING, PaddedChunk};
 use crate::face::{Axis, Face};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,15 +99,15 @@ struct MaskEntry<B: Block> {
     block: B,
     /// Face surface position along the normal axis, in 1/16ths from the block's
     /// min-normal coordinate. Whole-block positive face = 16, negative = 0.
-    normal_pos: u32,
+    normal_pos: u8,
     /// Quad start within the block along u, in 1/16ths.
-    u_intra_offset: u32,
+    u_intra_offset: u8,
     /// Quad extent within one block cell along u, in 1/16ths.
-    u_intra_extent: u32,
+    u_intra_extent: u8,
     /// Quad start within the block along v, in 1/16ths.
-    v_intra_offset: u32,
+    v_intra_offset: u8,
     /// Quad extent within one block cell along v, in 1/16ths.
-    v_intra_extent: u32,
+    v_intra_extent: u8,
 }
 
 /// Returns the (normal_idx, u_idx, v_idx) axis indices for a face, matching
@@ -142,108 +142,71 @@ fn is_culled_at_boundary<B: Block>(block: &B, neighbor: &B, face: Face) -> bool 
     }
 }
 
-/// Compute the mask entry for a block/face combination, or `None` if the face
-/// is not visible.
-fn compute_mask_entry<B: Block>(
+/// Compute the mask entry for a slab block/face combination, or `None` if the
+/// face is not visible. Only called when `block.shape()` is `Slab`.
+#[inline]
+fn compute_slab_mask_entry<B: Block>(
     block: &B,
     neighbor: &B,
     face: Face,
     u_idx: usize,
     v_idx: usize,
 ) -> Option<MaskEntry<B>> {
-    if !block.cull_mode().is_renderable() {
-        return None;
-    }
+    let ft = FULL_THICKNESS as u8;
+    let info = match block.shape() {
+        Shape::Slab(info) => info,
+        Shape::WholeBlock => unreachable!(),
+    };
 
-    let ft = FULL_THICKNESS;
+    let slab_axis_idx = info.face.axis().index();
+    let thickness = info.thickness as u8;
 
-    match block.shape() {
-        Shape::WholeBlock => {
-            // All faces are flush (at block boundary).
+    let (slab_min, slab_max) = if info.face.is_positive() {
+        (ft - thickness, ft)
+    } else {
+        (0, thickness)
+    };
+
+    if face.axis() == info.face.axis() {
+        if face == info.face {
             if is_culled_at_boundary(block, neighbor, face) {
                 return None;
             }
-            let normal_pos = if face.is_positive() { ft } else { 0 };
-            Some(MaskEntry {
-                block: *block,
-                normal_pos,
-                u_intra_offset: 0,
-                u_intra_extent: ft,
-                v_intra_offset: 0,
-                v_intra_extent: ft,
-            })
         }
-        Shape::Slab(info) => {
-            let slab_axis_idx = info.face.axis().index();
-            let thickness = info.thickness;
-
-            // Range occupied by the slab along its axis, in 1/16ths from block min.
-            let (slab_min, slab_max) = if info.face.is_positive() {
-                (ft - thickness, ft)
-            } else {
-                (0, thickness)
-            };
-
-            if face.axis() == info.face.axis() {
-                // Top/bottom face of the slab (along slab axis).
-                if face == info.face {
-                    // Flush face — at block boundary.
-                    if is_culled_at_boundary(block, neighbor, face) {
-                        return None;
-                    }
-                    let normal_pos = if face.is_positive() {
-                        slab_max
-                    } else {
-                        slab_min
-                    };
-                    Some(MaskEntry {
-                        block: *block,
-                        normal_pos,
-                        u_intra_offset: 0,
-                        u_intra_extent: ft,
-                        v_intra_offset: 0,
-                        v_intra_extent: ft,
-                    })
-                } else {
-                    // Inset face — recessed inside the block, never culled.
-                    let normal_pos = if face.is_positive() {
-                        slab_max
-                    } else {
-                        slab_min
-                    };
-                    Some(MaskEntry {
-                        block: *block,
-                        normal_pos,
-                        u_intra_offset: 0,
-                        u_intra_extent: ft,
-                        v_intra_offset: 0,
-                        v_intra_extent: ft,
-                    })
-                }
-            } else {
-                // Side face — at block boundary but reduced extent along slab axis.
-                if is_culled_at_boundary(block, neighbor, face) {
-                    return None;
-                }
-                let normal_pos = if face.is_positive() { ft } else { 0 };
-
-                let (u_off, u_ext, v_off, v_ext) = if slab_axis_idx == u_idx {
-                    (slab_min, thickness, 0, ft)
-                } else {
-                    debug_assert_eq!(slab_axis_idx, v_idx);
-                    (0, ft, slab_min, thickness)
-                };
-
-                Some(MaskEntry {
-                    block: *block,
-                    normal_pos,
-                    u_intra_offset: u_off,
-                    u_intra_extent: u_ext,
-                    v_intra_offset: v_off,
-                    v_intra_extent: v_ext,
-                })
-            }
+        let normal_pos = if face.is_positive() {
+            slab_max
+        } else {
+            slab_min
+        };
+        Some(MaskEntry {
+            block: *block,
+            normal_pos,
+            u_intra_offset: 0,
+            u_intra_extent: ft,
+            v_intra_offset: 0,
+            v_intra_extent: ft,
+        })
+    } else {
+        if is_culled_at_boundary(block, neighbor, face) {
+            return None;
         }
+        let normal_pos = if face.is_positive() { ft } else { 0 };
+
+        let (u_off, u_ext, v_off, v_ext) = if slab_axis_idx == u_idx {
+            (slab_min, thickness, 0, ft)
+        } else {
+            debug_assert_eq!(slab_axis_idx, v_idx);
+            (0, ft, slab_min, thickness)
+        };
+
+        Some(MaskEntry {
+            block: *block,
+            normal_pos,
+            u_intra_offset: u_off,
+            u_intra_extent: u_ext,
+            v_intra_offset: v_off,
+            v_intra_extent: v_ext,
+        })
     }
 }
 
@@ -280,38 +243,85 @@ pub fn greedy_mesh<B: Block>(chunk: &PaddedChunk<B>) -> Quads {
     quads
 }
 
+/// Returns (n_stride, u_stride, v_stride) as linear index steps into the
+/// padded chunk array, matching the tangent convention in [`face_tangents`].
+#[inline]
+fn face_strides(face: Face) -> (usize, usize, usize) {
+    const P: usize = PADDED;
+    const P2: usize = PADDED * PADDED;
+    match face {
+        Face::PosX | Face::NegX => (1, P2, P), // normal=X, u=Z, v=Y
+        Face::PosY | Face::NegY => (P, P2, 1), // normal=Y, u=Z, v=X
+        Face::PosZ | Face::NegZ => (P2, 1, P), // normal=Z, u=X, v=Y
+    }
+}
+
 /// Like [`greedy_mesh`], but reuses an existing [`Quads`] buffer.
 ///
 /// The buffer is [`reset`](Quads::reset) before meshing, so previous contents
 /// are cleared but backing allocations are preserved across calls.
 pub fn greedy_mesh_into<B: Block>(chunk: &PaddedChunk<B>, quads: &mut Quads) {
     quads.reset();
-    let ft = FULL_THICKNESS;
+    let ft = FULL_THICKNESS as u8;
+    let data = &chunk.data;
+
+    // Mask is hoisted outside the layer loop — the build phase overwrites every
+    // cell unconditionally so the previous layer's values don't matter.
+    let mut mask: [[Option<MaskEntry<B>>; CHUNK_SIZE]; CHUNK_SIZE] =
+        [[None; CHUNK_SIZE]; CHUNK_SIZE];
 
     for face in Face::ALL {
         let (normal_idx, u_idx, v_idx) = face_axis_indices(face);
-        let neighbor_offset: isize = if face.is_positive() { 1 } else { -1 };
+        let (n_stride, u_stride, v_stride) = face_strides(face);
+        let neighbor_stride: isize = if face.is_positive() {
+            n_stride as isize
+        } else {
+            -(n_stride as isize)
+        };
+        let whole_normal_pos: u8 = if face.is_positive() { ft } else { 0 };
 
         for layer in 0..CHUNK_SIZE {
+            let layer_base = (PADDING + layer) * n_stride + PADDING * u_stride + PADDING * v_stride;
+
             // Build the 2D mask for this layer.
-            let mut mask: [[Option<MaskEntry<B>>; CHUNK_SIZE]; CHUNK_SIZE] =
-                [[None; CHUNK_SIZE]; CHUNK_SIZE];
-
+            let mut v_base = layer_base;
             for v in 0..CHUNK_SIZE {
+                let mut idx = v_base;
                 for u in 0..CHUNK_SIZE {
-                    let mut pos = [0usize; 3];
-                    pos[normal_idx] = PADDING + layer;
-                    pos[u_idx] = PADDING + u;
-                    pos[v_idx] = PADDING + v;
+                    debug_assert!(idx < data.len());
+                    let n_idx = (idx as isize + neighbor_stride) as usize;
+                    debug_assert!(n_idx < data.len());
 
-                    let mut npos = pos;
-                    npos[normal_idx] = (npos[normal_idx] as isize + neighbor_offset) as usize;
+                    // SAFETY: The PADDING ring guarantees all indices
+                    // (including the neighbor one step along the normal) are
+                    // within the PADDED_VOLUME array.
+                    let (block, neighbor) =
+                        unsafe { (data.get_unchecked(idx), data.get_unchecked(n_idx)) };
 
-                    let block = chunk.get_padded(pos[0], pos[1], pos[2]);
-                    let neighbor = chunk.get_padded(npos[0], npos[1], npos[2]);
+                    // Inlined WholeBlock fast path — avoids the full
+                    // compute_slab_mask_entry call for the common case.
+                    mask[v][u] = if !block.cull_mode().is_renderable() {
+                        None
+                    } else if matches!(block.shape(), Shape::WholeBlock) {
+                        if is_culled_at_boundary(block, neighbor, face) {
+                            None
+                        } else {
+                            Some(MaskEntry {
+                                block: *block,
+                                normal_pos: whole_normal_pos,
+                                u_intra_offset: 0,
+                                u_intra_extent: ft,
+                                v_intra_offset: 0,
+                                v_intra_extent: ft,
+                            })
+                        }
+                    } else {
+                        compute_slab_mask_entry(block, neighbor, face, u_idx, v_idx)
+                    };
 
-                    mask[v][u] = compute_mask_entry(block, neighbor, face, u_idx, v_idx);
+                    idx += u_stride;
                 }
+                v_base += v_stride;
             }
 
             // Greedy merge.
@@ -327,20 +337,26 @@ pub fn greedy_mesh_into<B: Block>(chunk: &PaddedChunk<B>, quads: &mut Quads) {
                     };
 
                     // Find widest run of identical entries along u.
+                    // Sub-block u extents (slabs) must not merge along u.
                     let mut width = 1;
-                    while u + width < CHUNK_SIZE && mask[v][u + width] == Some(entry) {
-                        width += 1;
+                    if entry.u_intra_extent == ft {
+                        while u + width < CHUNK_SIZE && mask[v][u + width] == Some(entry) {
+                            width += 1;
+                        }
                     }
 
                     // Extend the run along v.
+                    // Sub-block v extents (slabs) must not merge along v.
                     let mut height = 1;
-                    'extend: while v + height < CHUNK_SIZE {
-                        for du in 0..width {
-                            if mask[v + height][u + du] != Some(entry) {
-                                break 'extend;
+                    if entry.v_intra_extent == ft {
+                        'extend: while v + height < CHUNK_SIZE {
+                            for du in 0..width {
+                                if mask[v + height][u + du] != Some(entry) {
+                                    break 'extend;
+                                }
                             }
+                            height += 1;
                         }
-                        height += 1;
                     }
 
                     // Clear the merged region.
@@ -351,16 +367,17 @@ pub fn greedy_mesh_into<B: Block>(chunk: &PaddedChunk<B>, quads: &mut Quads) {
                     }
 
                     // Emit the quad.
+                    let ft32 = FULL_THICKNESS;
                     let mut origin = [0u32; 3];
-                    origin[normal_idx] = (PADDING + layer) as u32 * ft + entry.normal_pos;
-                    origin[u_idx] = (PADDING + u) as u32 * ft + entry.u_intra_offset;
-                    origin[v_idx] = (PADDING + v) as u32 * ft + entry.v_intra_offset;
+                    origin[normal_idx] = (PADDING + layer) as u32 * ft32 + entry.normal_pos as u32;
+                    origin[u_idx] = (PADDING + u) as u32 * ft32 + entry.u_intra_offset as u32;
+                    origin[v_idx] = (PADDING + v) as u32 * ft32 + entry.v_intra_offset as u32;
 
                     let quad = Quad {
                         origin_padded: UVec3::new(origin[0], origin[1], origin[2]),
                         size: UVec2::new(
-                            width as u32 * entry.u_intra_extent,
-                            height as u32 * entry.v_intra_extent,
+                            width as u32 * entry.u_intra_extent as u32,
+                            height as u32 * entry.v_intra_extent as u32,
                         ),
                     };
 
