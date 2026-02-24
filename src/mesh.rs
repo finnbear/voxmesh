@@ -120,19 +120,37 @@ fn face_axis_indices(face: Face) -> (usize, usize, usize) {
     }
 }
 
-/// Whether a neighbor block fully covers the block boundary on the given
-/// `neighbor_face` (the face of the neighbor that touches our block).
-fn neighbor_covers_boundary<B: Block>(neighbor: &B, neighbor_face: Face) -> bool {
+/// Whether the neighbor fully covers the block's face region on the shared
+/// boundary. For whole-blocks this is simple; for slabs we must check whether
+/// the neighbor occupies at least the same sub-region as the block along the
+/// slab axis.
+fn neighbor_covers_face_region<B: Block>(block: &B, neighbor: &B, face: Face) -> bool {
     match neighbor.shape() {
         Shape::WholeBlock => true,
-        Shape::Slab(info) => info.face == neighbor_face,
+        Shape::Slab(n_info) => {
+            // The neighbor slab is flush against our face on this boundary
+            // only if its slab face equals our face's opposite.
+            if n_info.face == face.opposite() {
+                return true;
+            }
+            // For side faces: if the block is also a slab with the same axis
+            // and the neighbor covers at least the block's extent, it culls.
+            if let Shape::Slab(b_info) = block.shape() {
+                if b_info.face.axis() == n_info.face.axis() && face.axis() != b_info.face.axis() {
+                    // Both slabs share the same axis; the neighbor covers our
+                    // region if its thickness is >= ours on the same side.
+                    return b_info.face == n_info.face && n_info.thickness >= b_info.thickness;
+                }
+            }
+            false
+        }
     }
 }
 
 /// Whether the current block's face is culled by the given neighbor.
 /// Only call this for faces that sit at the block boundary (flush / side).
 fn is_culled_at_boundary<B: Block>(block: &B, neighbor: &B, face: Face) -> bool {
-    if !neighbor_covers_boundary(neighbor, face.opposite()) {
+    if !neighbor_covers_face_region(block, neighbor, face) {
         return false;
     }
     match neighbor.cull_mode() {

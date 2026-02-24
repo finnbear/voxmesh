@@ -19,6 +19,21 @@ fn flat_layer_merges_into_one_quad_per_face() {
 }
 
 #[test]
+fn flat_slab_layer_merges_into_one_quad_per_face() {
+    let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
+    for x in 0..CHUNK_SIZE {
+        for z in 0..CHUNK_SIZE {
+            chunk.set(x, 0, z, TestBlock::LowerSlab);
+        }
+    }
+    let q = greedy_mesh(&chunk);
+    for face in Face::ALL {
+        assert_eq!(face_count(&q, face), 1, "face {:?}", face);
+    }
+    assert_eq!(q.total(), 6);
+}
+
+#[test]
 fn full_chunk_same_block_produces_six_quads() {
     let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
     for x in 0..CHUNK_SIZE {

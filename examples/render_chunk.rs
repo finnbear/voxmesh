@@ -39,7 +39,7 @@ impl Block for MyBlock {
         match self {
             MyBlock::CobbleSlab => Shape::Slab(SlabInfo {
                 face: Face::NegY,
-                thickness: 8,
+                thickness: 1,
             }),
             _ => Shape::WholeBlock,
         }
