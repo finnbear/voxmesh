@@ -54,9 +54,7 @@ impl Block for MyBlock {
             MyBlock::Air => CullMode::Empty,
             MyBlock::Cobblestone | MyBlock::Clay | MyBlock::CobbleSlab => CullMode::Opaque,
             MyBlock::Glass => CullMode::TransparentMerged,
-            MyBlock::Leaves | MyBlock::SugarCane | MyBlock::Cobweb => {
-                CullMode::TransparentUnmerged
-            }
+            MyBlock::Leaves | MyBlock::SugarCane | MyBlock::Cobweb => CullMode::TransparentUnmerged,
         }
     }
 }
@@ -314,33 +312,23 @@ fn quads_to_vertices(quads: &Quads, chunk: &PaddedChunk<MyBlock>) -> Vec<Vertex>
                 vp.z as usize + PADDING,
             );
 
-            let (positions, uvs, normal) = match qf {
-                QuadFace::Aligned(face) => {
-                    let positions = quad.positions(face);
-                    let uvs = quad.texture_coordinates(face, Axis::X, false);
-                    let n = face.normal();
-                    let normal = Vec3::new(n.x as f32, n.y as f32, n.z as f32);
-                    (positions, uvs, normal)
-                }
+            let n = qf.normal();
+            let normal = Vec3::new(n.x, n.y, n.z);
+
+            let (positions, uvs) = match qf {
+                QuadFace::Aligned(face) => (
+                    quad.positions(face),
+                    quad.texture_coordinates(face, Axis::X, false),
+                ),
                 QuadFace::Diagonal(diag) => {
                     let stretch = match block.shape() {
                         Shape::Cross(s) => s,
                         _ => 0,
                     };
-                    let positions = quad.diagonal_positions(diag, stretch);
-                    let uvs = quad.diagonal_texture_coordinates();
-                    let e1 = Vec3::new(
-                        positions[1].x - positions[0].x,
-                        positions[1].y - positions[0].y,
-                        positions[1].z - positions[0].z,
-                    );
-                    let e2 = Vec3::new(
-                        positions[3].x - positions[0].x,
-                        positions[3].y - positions[0].y,
-                        positions[3].z - positions[0].z,
-                    );
-                    let normal = Vec3::cross(e1, e2).normalized();
-                    (positions, uvs, normal)
+                    (
+                        quad.diagonal_positions(diag, stretch),
+                        quad.diagonal_texture_coordinates(),
+                    )
                 }
             };
 

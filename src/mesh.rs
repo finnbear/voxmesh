@@ -1,7 +1,7 @@
 use glam::{UVec2, UVec3, Vec2, Vec3};
 
-use crate::block::{Block, CrossStretch, CullMode, FULL_THICKNESS, Shape};
-use crate::chunk::{CHUNK_SIZE, PADDED, PADDING, PaddedChunk};
+use crate::block::{Block, CrossStretch, CullMode, Shape, FULL_THICKNESS};
+use crate::chunk::{PaddedChunk, CHUNK_SIZE, PADDED, PADDING};
 use crate::face::{Axis, DiagonalFace, Face, QuadFace};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -464,13 +464,7 @@ fn emit_quad<B: Block>(
 /// padding). `y_block` is the base Y position. `height` is the number of
 /// blocks merged vertically.
 #[inline]
-fn emit_cross_quads(
-    quads: &mut Quads,
-    x_block: u32,
-    y_block: u32,
-    z_block: u32,
-    height: u32,
-) {
+fn emit_cross_quads(quads: &mut Quads, x_block: u32, y_block: u32, z_block: u32, height: u32) {
     let ft32 = FULL_THICKNESS;
     for diag in DiagonalFace::ALL {
         quads.diagonals[diag.index()].push(Quad {

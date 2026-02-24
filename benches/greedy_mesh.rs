@@ -5,7 +5,7 @@ extern crate test;
 use test::Bencher;
 
 use block_mesh::{
-    GreedyQuadsBuffer, MergeVoxel, RIGHT_HANDED_Y_UP_CONFIG, Voxel, VoxelVisibility, greedy_quads,
+    greedy_quads, GreedyQuadsBuffer, MergeVoxel, Voxel, VoxelVisibility, RIGHT_HANDED_Y_UP_CONFIG,
 };
 use ndshape::{ConstShape, ConstShape3u32};
 use voxmesh::{greedy_mesh_into, *};

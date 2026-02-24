@@ -87,18 +87,13 @@ fn different_cross_blocks_do_not_merge() {
 
 #[test]
 fn cross_does_not_cull_adjacent_opaque_block() {
-    let q = mesh_with(&[
-        (0, 0, 0, TestBlock::SugarCane),
-        (1, 0, 0, TestBlock::Stone),
-    ]);
+    let q = mesh_with(&[(0, 0, 0, TestBlock::SugarCane), (1, 0, 0, TestBlock::Stone)]);
     // Stone should still have all 6 faces (cross doesn't cull it).
     // The face toward the cross block (NegX) should be present.
-    let stone_neg_x = q.faces[Face::NegX.index()]
-        .iter()
-        .any(|quad| {
-            let verts = quad.positions(Face::NegX);
-            (verts[0].x - 1.0).abs() < 1e-6
-        });
+    let stone_neg_x = q.faces[Face::NegX.index()].iter().any(|quad| {
+        let verts = quad.positions(Face::NegX);
+        (verts[0].x - 1.0).abs() < 1e-6
+    });
     assert!(stone_neg_x, "stone NegX face should be present");
 }
 

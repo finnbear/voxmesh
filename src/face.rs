@@ -106,6 +106,24 @@ impl QuadFace {
     pub fn is_diagonal(self) -> bool {
         matches!(self, QuadFace::Diagonal(_))
     }
+
+    /// Returns the normalized outward normal for this face.
+    ///
+    /// For axis-aligned faces this is the unit axis vector. For diagonal
+    /// faces the normal is perpendicular to both the diagonal direction and
+    /// the Y axis (the sign is arbitrary since diagonal quads are two-sided).
+    #[inline]
+    pub fn normal(self) -> Vec3 {
+        match self {
+            QuadFace::Aligned(f) => f.normal().as_vec3(),
+            QuadFace::Diagonal(d) => {
+                let dir = d.direction(); // (±1, 0, ±1)
+                                         // cross(dir, Y) gives a horizontal vector perpendicular to the diagonal.
+                let n = dir.cross(Vec3::Y);
+                n.normalize()
+            }
+        }
+    }
 }
 
 impl From<Face> for QuadFace {

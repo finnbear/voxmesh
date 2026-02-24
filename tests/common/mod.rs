@@ -10,9 +10,9 @@ pub enum TestBlock {
     Glass,
     Leaves,
     UpperSlab, // PosY slab, thickness 8
-    LowerSlab,  // NegY slab, thickness 8
-    SugarCane,  // Cross(0) — diagonal billboard, no stretch
-    Cobweb,     // Cross(4) — diagonal billboard, stretched
+    LowerSlab, // NegY slab, thickness 8
+    SugarCane, // Cross(0) — diagonal billboard, no stretch
+    Cobweb,    // Cross(4) — diagonal billboard, stretched
 }
 
 impl Block for TestBlock {
