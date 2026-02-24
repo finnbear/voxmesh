@@ -160,13 +160,14 @@ impl DiagonalFace {
         self as u8 as usize
     }
 
-    /// Returns the horizontal direction vector for this diagonal (in the XZ
-    /// plane). The vector is **not** normalized — its components are ±1.
+    /// Returns the normalized horizontal direction vector for this diagonal
+    /// (in the XZ plane).
     #[inline]
     pub fn direction(self) -> Vec3 {
+        let s = std::f32::consts::FRAC_1_SQRT_2;
         match self {
-            DiagonalFace::A => Vec3::new(1.0, 0.0, 1.0),
-            DiagonalFace::B => Vec3::new(-1.0, 0.0, 1.0),
+            DiagonalFace::A => Vec3::new(s, 0.0, s),
+            DiagonalFace::B => Vec3::new(-s, 0.0, s),
         }
     }
 }
