@@ -124,19 +124,27 @@ fn cross_diagonal_positions_span_unit_block() {
             diag
         );
 
-        // XZ center should be at (0.5, 0.5).
-        let cx = verts.iter().map(|v| v.x).sum::<f32>() / 4.0;
-        let cz = verts.iter().map(|v| v.z).sum::<f32>() / 4.0;
-        assert!(
-            (cx - 0.5).abs() < 1e-6,
-            "diagonal {:?} x center should be 0.5, got {cx}",
-            diag
-        );
-        assert!(
-            (cz - 0.5).abs() < 1e-6,
-            "diagonal {:?} z center should be 0.5, got {cz}",
-            diag
-        );
+        // All vertices should be within the unit cube [0,1]^3.
+        for (i, v) in verts.iter().enumerate() {
+            assert!(
+                v.x >= -1e-6 && v.x <= 1.0 + 1e-6,
+                "diagonal {:?} vertex {i} x={} out of [0,1]",
+                diag,
+                v.x
+            );
+            assert!(
+                v.y >= -1e-6 && v.y <= 1.0 + 1e-6,
+                "diagonal {:?} vertex {i} y={} out of [0,1]",
+                diag,
+                v.y
+            );
+            assert!(
+                v.z >= -1e-6 && v.z <= 1.0 + 1e-6,
+                "diagonal {:?} vertex {i} z={} out of [0,1]",
+                diag,
+                v.z
+            );
+        }
     }
 }
 

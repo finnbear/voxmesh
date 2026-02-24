@@ -284,7 +284,7 @@ fn build_chunk() -> PaddedChunk<MyBlock> {
     }
 
     // Sugar cane stalks (3 blocks tall).
-    for &(sx, sz) in &[(5, 5), (5, 6), (6, 5), (10, 10), (10, 11)] {
+    for &(sx, sz) in &[(1, 1), (1, 2), (2, 1), (14, 14), (14, 15)] {
         for y in 1..4 {
             chunk.set(sx, y, sz, MyBlock::SugarCane);
         }
