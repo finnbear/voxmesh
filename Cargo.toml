@@ -1,0 +1,22 @@
+[package]
+name = "voxmesh"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+glam = "0.32.0"
+
+[dev-dependencies]
+block-mesh = "0.2"
+ndshape = "0.3"
+euc = { git = "https://github.com/zesterer/euc.git", default-features = false }
+vek = "0.17"
+image = "0.25"
+
+[[example]]
+name = "render_chunk"
+path = "examples/render_chunk.rs"
+
+[[bench]]
+name = "greedy_mesh"
+path = "benches/greedy_mesh.rs"
