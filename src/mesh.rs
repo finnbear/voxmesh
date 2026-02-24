@@ -57,104 +57,123 @@ impl Quad {
         }
     }
 
-    pub fn positions(&self, face: Face) -> [Vec3; 4] {
-        let scale = 1.0 / FULL_THICKNESS as f32;
-        let pad = PADDING as f32;
-        let base = Vec3::new(
-            self.origin_padded.x as f32 * scale - pad,
-            self.origin_padded.y as f32 * scale - pad,
-            self.origin_padded.z as f32 * scale - pad,
-        );
+    /// Returns the 4 vertex positions for this quad in CCW winding order
+    /// (viewed from outside).
+    ///
+    /// `stretch` is the horizontal stretch in 1/16ths for diagonal
+    /// ([`Shape::Cross`]) faces — 0 for sugar cane (corners on the block
+    /// diagonal), positive to push edges toward the block corners (cobwebs).
+    /// It is ignored for axis-aligned faces.
+    pub fn positions(&self, face: impl Into<QuadFace>, stretch: CrossStretch) -> [Vec3; 4] {
+        match face.into() {
+            QuadFace::Aligned(face) => {
+                let scale = 1.0 / FULL_THICKNESS as f32;
+                let pad = PADDING as f32;
+                let base = Vec3::new(
+                    self.origin_padded.x as f32 * scale - pad,
+                    self.origin_padded.y as f32 * scale - pad,
+                    self.origin_padded.z as f32 * scale - pad,
+                );
 
-        let (u_dir, v_dir) = face_tangents(face);
-        let du = u_dir * self.size.x as f32 * scale;
-        let dv = v_dir * self.size.y as f32 * scale;
+                let (u_dir, v_dir) = face_tangents(face);
+                let du = u_dir * self.size.x as f32 * scale;
+                let dv = v_dir * self.size.y as f32 * scale;
 
-        // Emit CCW winding when viewed from outside. The vertex order
-        // [base, base+du, base+du+dv, base+dv] is CCW when u×v aligns with
-        // the outward normal. When u×v opposes it, swap du/dv offsets.
-        let cross_sign = u_dir.cross(v_dir).dot(face.normal().as_vec3());
-        if cross_sign > 0.0 {
-            [base, base + du, base + du + dv, base + dv]
-        } else {
-            [base, base + dv, base + dv + du, base + du]
+                // Emit CCW winding when viewed from outside. The vertex order
+                // [base, base+du, base+du+dv, base+dv] is CCW when u×v aligns with
+                // the outward normal. When u×v opposes it, swap du/dv offsets.
+                let cross_sign = u_dir.cross(v_dir).dot(face.normal().as_vec3());
+                if cross_sign > 0.0 {
+                    [base, base + du, base + du + dv, base + dv]
+                } else {
+                    [base, base + dv, base + dv + du, base + du]
+                }
+            }
+            QuadFace::Diagonal(diag) => {
+                let scale = 1.0 / FULL_THICKNESS as f32;
+                let pad = PADDING as f32;
+
+                let base_y = self.origin_padded.y as f32 * scale - pad;
+                let height = self.size.y as f32 * scale;
+
+                let bx = self.origin_padded.x as f32 * scale - pad;
+                let bz = self.origin_padded.z as f32 * scale - pad;
+                let cx = bx + 0.5;
+                let cz = bz + 0.5;
+
+                let half_diag = 0.5 + stretch as f32 * scale;
+
+                let dir = diag.direction();
+                let dx = dir.x * half_diag;
+                let dz = dir.z * half_diag;
+
+                let p0 = Vec3::new(cx - dx, base_y, cz - dz);
+                let p1 = Vec3::new(cx + dx, base_y, cz + dz);
+                let p2 = Vec3::new(cx + dx, base_y + height, cz + dz);
+                let p3 = Vec3::new(cx - dx, base_y + height, cz - dz);
+
+                [p0, p1, p2, p3]
+            }
         }
     }
 
-    pub fn texture_coordinates(&self, face: Face, u_flip_face: Axis, flip_v: bool) -> [Vec2; 4] {
-        let u_size = self.size.x as f32 / FULL_THICKNESS as f32;
-        let v_size = self.size.y as f32 / FULL_THICKNESS as f32;
-
-        let flip_u = if face.is_positive() {
-            face.axis() == u_flip_face
-        } else {
-            face.axis() != u_flip_face
-        };
-
-        let (u_dir, v_dir) = face_tangents(face);
-        let cross_sign = u_dir.cross(v_dir).dot(face.normal().as_vec3());
-
-        let raw = if cross_sign > 0.0 {
-            [
-                Vec2::new(0.0, 0.0),
-                Vec2::new(u_size, 0.0),
-                Vec2::new(u_size, v_size),
-                Vec2::new(0.0, v_size),
-            ]
-        } else {
-            [
-                Vec2::new(0.0, 0.0),
-                Vec2::new(0.0, v_size),
-                Vec2::new(u_size, v_size),
-                Vec2::new(u_size, 0.0),
-            ]
-        };
-
-        raw.map(|uv| {
-            Vec2::new(
-                if flip_u { u_size - uv.x } else { uv.x },
-                if flip_v { v_size - uv.y } else { uv.y },
-            )
-        })
-    }
-
-    /// Vertex positions for a diagonal (X-shaped billboard) quad.
+    /// Returns the 4 texture coordinates for this quad.
     ///
-    /// `stretch` is the horizontal stretch in 1/16ths — 0 for sugar cane
-    /// (corners on the block diagonal), positive to push edges toward the
-    /// block corners (cobwebs).
-    ///
-    /// The quad is emitted as a single front face; the GPU should render it
-    /// two-sided (backface culling disabled).
-    pub fn diagonal_positions(&self, diag: DiagonalFace, stretch: CrossStretch) -> [Vec3; 4] {
-        let scale = 1.0 / FULL_THICKNESS as f32;
-        let pad = PADDING as f32;
+    /// `u_flip_face` and `flip_v` control UV mirroring for axis-aligned faces
+    /// and are ignored for diagonal faces.
+    pub fn texture_coordinates(
+        &self,
+        face: impl Into<QuadFace>,
+        u_flip_face: Axis,
+        flip_v: bool,
+    ) -> [Vec2; 4] {
+        match face.into() {
+            QuadFace::Aligned(face) => {
+                let u_size = self.size.x as f32 / FULL_THICKNESS as f32;
+                let v_size = self.size.y as f32 / FULL_THICKNESS as f32;
 
-        // Block-local base Y and height.
-        let base_y = self.origin_padded.y as f32 * scale - pad;
-        let height = self.size.y as f32 * scale;
+                let flip_u = if face.is_positive() {
+                    face.axis() == u_flip_face
+                } else {
+                    face.axis() != u_flip_face
+                };
 
-        // Block-local XZ center — origin_padded stores the block position.
-        let bx = self.origin_padded.x as f32 * scale - pad;
-        let bz = self.origin_padded.z as f32 * scale - pad;
-        let cx = bx + 0.5;
-        let cz = bz + 0.5;
+                let (u_dir, v_dir) = face_tangents(face);
+                let cross_sign = u_dir.cross(v_dir).dot(face.normal().as_vec3());
 
-        // Half-extent along the diagonal direction (in blocks).
-        // With stretch=0 the corners sit on the block diagonal: half_diag = 0.5.
-        // Each unit of stretch adds 1/16 to each side.
-        let half_diag = 0.5 + stretch as f32 * scale;
+                let raw = if cross_sign > 0.0 {
+                    [
+                        Vec2::new(0.0, 0.0),
+                        Vec2::new(u_size, 0.0),
+                        Vec2::new(u_size, v_size),
+                        Vec2::new(0.0, v_size),
+                    ]
+                } else {
+                    [
+                        Vec2::new(0.0, 0.0),
+                        Vec2::new(0.0, v_size),
+                        Vec2::new(u_size, v_size),
+                        Vec2::new(u_size, 0.0),
+                    ]
+                };
 
-        let dir = diag.direction(); // (±1, 0, ±1), not normalized
-        let dx = dir.x * half_diag;
-        let dz = dir.z * half_diag;
-
-        let p0 = Vec3::new(cx - dx, base_y, cz - dz);
-        let p1 = Vec3::new(cx + dx, base_y, cz + dz);
-        let p2 = Vec3::new(cx + dx, base_y + height, cz + dz);
-        let p3 = Vec3::new(cx - dx, base_y + height, cz - dz);
-
-        [p0, p1, p2, p3]
+                raw.map(|uv| {
+                    Vec2::new(
+                        if flip_u { u_size - uv.x } else { uv.x },
+                        if flip_v { v_size - uv.y } else { uv.y },
+                    )
+                })
+            }
+            QuadFace::Diagonal(_) => {
+                let v_size = self.size.y as f32 / FULL_THICKNESS as f32;
+                [
+                    Vec2::new(0.0, 0.0),
+                    Vec2::new(1.0, 0.0),
+                    Vec2::new(1.0, v_size),
+                    Vec2::new(0.0, v_size),
+                ]
+            }
+        }
     }
 
     /// Returns the 6 vertex indices for this quad (two triangles), suitable for
@@ -170,18 +189,6 @@ impl Quad {
     #[inline]
     pub fn indices(start: u32) -> [u32; 6] {
         [start, start + 1, start + 2, start, start + 2, start + 3]
-    }
-
-    /// Texture coordinates for a diagonal quad. UVs span [0, u_size] × [0, v_size]
-    /// where u_size = 1 (one block wide) and v_size = height in blocks.
-    pub fn diagonal_texture_coordinates(&self) -> [Vec2; 4] {
-        let v_size = self.size.y as f32 / FULL_THICKNESS as f32;
-        [
-            Vec2::new(0.0, 0.0),
-            Vec2::new(1.0, 0.0),
-            Vec2::new(1.0, v_size),
-            Vec2::new(0.0, v_size),
-        ]
     }
 }
 
