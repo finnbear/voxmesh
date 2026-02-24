@@ -1,8 +1,8 @@
 use glam::{UVec2, UVec3, Vec2, Vec3};
 
-use crate::block::{Block, CullMode, FULL_THICKNESS, Shape};
+use crate::block::{Block, CrossStretch, CullMode, FULL_THICKNESS, Shape};
 use crate::chunk::{CHUNK_SIZE, PADDED, PADDING, PaddedChunk};
-use crate::face::{Axis, Face};
+use crate::face::{Axis, DiagonalFace, Face};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Quad {
@@ -84,10 +84,63 @@ impl Quad {
             )
         })
     }
+
+    /// Vertex positions for a diagonal (X-shaped billboard) quad.
+    ///
+    /// `stretch` is the horizontal stretch in 1/16ths — 0 for sugar cane
+    /// (corners on the block diagonal), positive to push edges toward the
+    /// block corners (cobwebs).
+    ///
+    /// The quad is emitted as a single front face; the GPU should render it
+    /// two-sided (backface culling disabled).
+    pub fn diagonal_positions(&self, diag: DiagonalFace, stretch: CrossStretch) -> [Vec3; 4] {
+        let scale = 1.0 / FULL_THICKNESS as f32;
+        let pad = PADDING as f32;
+
+        // Block-local base Y and height.
+        let base_y = self.origin_padded.y as f32 * scale - pad;
+        let height = self.size.y as f32 * scale;
+
+        // Block-local XZ center — origin_padded stores the block position.
+        let bx = self.origin_padded.x as f32 * scale - pad;
+        let bz = self.origin_padded.z as f32 * scale - pad;
+        let cx = bx + 0.5;
+        let cz = bz + 0.5;
+
+        // Half-extent along the diagonal direction (in blocks).
+        // With stretch=0 the corners sit on the block diagonal: half_diag = 0.5.
+        // Each unit of stretch adds 1/16 to each side.
+        let half_diag = 0.5 + stretch as f32 * scale;
+
+        let dir = diag.direction(); // (±1, 0, ±1), not normalized
+        let dx = dir.x * half_diag;
+        let dz = dir.z * half_diag;
+
+        let p0 = Vec3::new(cx - dx, base_y, cz - dz);
+        let p1 = Vec3::new(cx + dx, base_y, cz + dz);
+        let p2 = Vec3::new(cx + dx, base_y + height, cz + dz);
+        let p3 = Vec3::new(cx - dx, base_y + height, cz - dz);
+
+        [p0, p1, p2, p3]
+    }
+
+    /// Texture coordinates for a diagonal quad. UVs span [0, u_size] × [0, v_size]
+    /// where u_size = 1 (one block wide) and v_size = height in blocks.
+    pub fn diagonal_texture_coordinates(&self) -> [Vec2; 4] {
+        let v_size = self.size.y as f32 / FULL_THICKNESS as f32;
+        [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(1.0, 0.0),
+            Vec2::new(1.0, v_size),
+            Vec2::new(0.0, v_size),
+        ]
+    }
 }
 
 pub struct Quads {
     pub faces: [Vec<Quad>; 6],
+    /// Diagonal quads for X-shaped billboard blocks, indexed by [`DiagonalFace`].
+    pub diagonals: [Vec<Quad>; 2],
 }
 
 // ---------------------------------------------------------------------------
@@ -127,6 +180,8 @@ fn face_axis_indices(face: Face) -> (usize, usize, usize) {
 fn neighbor_covers_face_region<B: Block>(block: &B, neighbor: &B, face: Face) -> bool {
     match neighbor.shape() {
         Shape::WholeBlock => true,
+        // Cross blocks never cover any face region.
+        Shape::Cross(_) => false,
         Shape::Slab(n_info) => {
             // The neighbor slab is flush against our face on this boundary
             // only if its slab face equals our face's opposite.
@@ -172,6 +227,8 @@ fn mask_entry_for_shape<B: Block>(
 ) -> Option<MaskEntry<B>> {
     let ft = FULL_THICKNESS as u8;
     match block.shape() {
+        // Cross blocks have no axis-aligned faces.
+        Shape::Cross(_) => return None,
         Shape::WholeBlock => {
             let normal_pos = if face.is_positive() { ft } else { 0 };
             Some(MaskEntry {
@@ -246,7 +303,7 @@ fn compute_slab_mask_entry<B: Block>(
 ) -> Option<MaskEntry<B>> {
     let info = match block.shape() {
         Shape::Slab(info) => info,
-        Shape::WholeBlock => unreachable!(),
+        Shape::WholeBlock | Shape::Cross(_) => unreachable!(),
     };
 
     // For the flush face of the slab along its own axis, check neighbor culling.
@@ -269,6 +326,7 @@ impl Quads {
     pub fn new() -> Self {
         Quads {
             faces: [vec![], vec![], vec![], vec![], vec![], vec![]],
+            diagonals: [vec![], vec![]],
         }
     }
 
@@ -277,11 +335,15 @@ impl Quads {
         for face in &mut self.faces {
             face.clear();
         }
+        for diag in &mut self.diagonals {
+            diag.clear();
+        }
     }
 
-    /// Total number of quads across all faces.
+    /// Total number of quads across all faces (including diagonals).
     pub fn total(&self) -> usize {
-        self.faces.iter().map(|v| v.len()).sum()
+        self.faces.iter().map(|v| v.len()).sum::<usize>()
+            + self.diagonals.iter().map(|v| v.len()).sum::<usize>()
     }
 }
 
@@ -344,6 +406,28 @@ fn emit_quad<B: Block>(
     }
 }
 
+/// Emit diagonal quads for a cross-shaped block into `quads`.
+///
+/// `x_block` and `z_block` are the block-level XZ position (including
+/// padding). `y_block` is the base Y position. `height` is the number of
+/// blocks merged vertically.
+#[inline]
+fn emit_cross_quads(
+    quads: &mut Quads,
+    x_block: u32,
+    y_block: u32,
+    z_block: u32,
+    height: u32,
+) {
+    let ft32 = FULL_THICKNESS;
+    for diag in DiagonalFace::ALL {
+        quads.diagonals[diag.index()].push(Quad {
+            origin_padded: UVec3::new(x_block * ft32, y_block * ft32, z_block * ft32),
+            size: UVec2::new(ft32, height * ft32),
+        });
+    }
+}
+
 /// Produce quads for a single block placed at the origin with all faces
 /// exposed (no neighbor culling). Useful for rendering held items or dropped
 /// block entities.
@@ -351,10 +435,22 @@ fn emit_quad<B: Block>(
 /// The resulting [`Quad`] positions span `[0, 1]` (or the appropriate
 /// sub-range for slabs), the same coordinate space as a block at `(0,0,0)` in
 /// a chunk.
+pub fn block_faces<B: Block>(block: &B) -> Quads {
+    let mut quads = Quads::new();
+    block_faces_into(block, &mut quads);
+    quads
+}
+
+/// Like [`block_faces`], but reuses an existing [`Quads`] buffer.
 pub fn block_faces_into<B: Block>(block: &B, quads: &mut Quads) {
     quads.reset();
 
     if !block.cull_mode().is_renderable() {
+        return;
+    }
+
+    if matches!(block.shape(), Shape::Cross(_)) {
+        emit_cross_quads(quads, PADDING as u32, PADDING as u32, PADDING as u32, 1);
         return;
     }
 
@@ -437,6 +533,9 @@ pub fn greedy_mesh_into<B: Block>(chunk: &PaddedChunk<B>, quads: &mut Quads) {
                                 v_intra_extent: ft,
                             })
                         }
+                    } else if matches!(block.shape(), Shape::Cross(_)) {
+                        // Cross blocks are handled in a separate pass.
+                        None
                     } else {
                         compute_slab_mask_entry(block, neighbor, face, u_idx, v_idx)
                     };
@@ -504,6 +603,49 @@ pub fn greedy_mesh_into<B: Block>(chunk: &PaddedChunk<B>, quads: &mut Quads) {
                     quads.faces[face.index()].push(quad);
                     u += width;
                 }
+            }
+        }
+    }
+
+    // Cross-block pass: scan Y columns and merge vertically.
+    let y_stride = PADDED; // index step for +1 Y
+    for z in 0..CHUNK_SIZE {
+        for x in 0..CHUNK_SIZE {
+            let col_base = crate::chunk::padded_idx(x + PADDING, PADDING, z + PADDING);
+            let mut y = 0;
+            while y < CHUNK_SIZE {
+                let idx = col_base + y * y_stride;
+                let block = unsafe { data.get_unchecked(idx) };
+
+                let stretch = match block.shape() {
+                    Shape::Cross(s) if block.cull_mode().is_renderable() => s,
+                    _ => {
+                        y += 1;
+                        continue;
+                    }
+                };
+
+                // Merge upward while the block is identical.
+                let mut height = 1u32;
+                while y + height as usize <= CHUNK_SIZE - 1 {
+                    let above_idx = col_base + (y + height as usize) * y_stride;
+                    let above = unsafe { data.get_unchecked(above_idx) };
+                    if above != block {
+                        break;
+                    }
+                    height += 1;
+                }
+                let _ = stretch; // stretch is stored on the block, not in the quad
+
+                emit_cross_quads(
+                    quads,
+                    (PADDING + x) as u32,
+                    (PADDING + y) as u32,
+                    (PADDING + z) as u32,
+                    height,
+                );
+
+                y += height as usize;
             }
         }
     }

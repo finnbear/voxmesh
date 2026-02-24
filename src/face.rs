@@ -1,4 +1,4 @@
-use glam::IVec3;
+use glam::{IVec3, Vec3};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -78,4 +78,35 @@ impl Face {
         Face::PosZ,
         Face::NegZ,
     ];
+}
+
+/// One of the two diagonal planes in an X-shaped billboard.
+///
+/// Viewed from above (looking down -Y), the two planes form an X:
+/// - `A`: runs from the (minX, minZ) corner to (maxX, maxZ) — the `+X +Z` diagonal.
+/// - `B`: runs from the (maxX, minZ) corner to (minX, maxZ) — the `-X +Z` diagonal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum DiagonalFace {
+    A,
+    B,
+}
+
+impl DiagonalFace {
+    pub const ALL: [DiagonalFace; 2] = [DiagonalFace::A, DiagonalFace::B];
+
+    #[inline]
+    pub fn index(self) -> usize {
+        self as u8 as usize
+    }
+
+    /// Returns the horizontal direction vector for this diagonal (in the XZ
+    /// plane). The vector is **not** normalized — its components are ±1.
+    #[inline]
+    pub fn direction(self) -> Vec3 {
+        match self {
+            DiagonalFace::A => Vec3::new(1.0, 0.0, 1.0),
+            DiagonalFace::B => Vec3::new(-1.0, 0.0, 1.0),
+        }
+    }
 }

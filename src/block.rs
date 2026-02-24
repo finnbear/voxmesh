@@ -36,10 +36,18 @@ pub struct SlabInfo {
     pub thickness: Thickness,
 }
 
+/// Horizontal stretch for cross-shaped billboard blocks, in 1/16ths.
+/// 0 means the quad corners sit on the block's diagonal (standard sugar cane).
+/// Higher values push the quad edges outward toward the block corners (cobwebs).
+pub type CrossStretch = u32;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shape {
     WholeBlock,
     Slab(SlabInfo),
+    /// X-shaped diagonal billboard (e.g. sugar cane, cobwebs).
+    /// Two vertical quads crossing diagonally through the block center.
+    Cross(CrossStretch),
 }
 
 pub trait Block: Copy + PartialEq + Debug {

@@ -32,6 +32,8 @@ enum MyBlock {
     Clay,
     Glass,
     Leaves,
+    SugarCane, // Cross(0) — diagonal billboard
+    Cobweb,    // Cross(4) — stretched diagonal billboard
 }
 
 impl Block for MyBlock {
@@ -39,8 +41,10 @@ impl Block for MyBlock {
         match self {
             MyBlock::CobbleSlab => Shape::Slab(SlabInfo {
                 face: Face::NegY,
-                thickness: 1,
+                thickness: 8,
             }),
+            MyBlock::SugarCane => Shape::Cross(0),
+            MyBlock::Cobweb => Shape::Cross(4),
             _ => Shape::WholeBlock,
         }
     }
@@ -50,7 +54,9 @@ impl Block for MyBlock {
             MyBlock::Air => CullMode::Empty,
             MyBlock::Cobblestone | MyBlock::Clay | MyBlock::CobbleSlab => CullMode::Opaque,
             MyBlock::Glass => CullMode::TransparentMerged,
-            MyBlock::Leaves => CullMode::TransparentUnmerged,
+            MyBlock::Leaves | MyBlock::SugarCane | MyBlock::Cobweb => {
+                CullMode::TransparentUnmerged
+            }
         }
     }
 }
@@ -76,12 +82,15 @@ fn build_atlas() -> Buffer2d<Rgba<f32>> {
         "examples/clay.png",
         "examples/glass.png",
         "examples/leaves.png",
+        "examples/sugarcane.png",
+        "examples/cobweb.png",
     ]
     .iter()
     .map(|p| load_tile(p))
     .collect();
 
-    let mut atlas = Buffer2d::fill([64, 16], Rgba::zero());
+    let atlas_w = tiles.len() * 16;
+    let mut atlas = Buffer2d::fill([atlas_w, 16], Rgba::zero());
     for (tile_idx, tile) in tiles.iter().enumerate() {
         for ty in 0..16usize {
             for tx in 0..16usize {
@@ -100,6 +109,8 @@ fn atlas_u_offset(block: MyBlock) -> f32 {
         MyBlock::Clay => 1.0,
         MyBlock::Glass => 2.0,
         MyBlock::Leaves => 3.0,
+        MyBlock::SugarCane => 4.0,
+        MyBlock::Cobweb => 5.0,
         MyBlock::Air => 0.0,
     }
 }
@@ -154,6 +165,7 @@ impl std::ops::Add for VsOut {
 struct ChunkPipeline<'a> {
     mvp: Mat4<f32>,
     atlas: &'a Buffer2d<Rgba<f32>>,
+    cull_mode: EucCullMode,
 }
 
 impl<'r, 'a: 'r> Pipeline<'r> for ChunkPipeline<'a> {
@@ -175,7 +187,7 @@ impl<'r, 'a: 'r> Pipeline<'r> for ChunkPipeline<'a> {
         &self,
     ) -> <<Self::Primitives as euc::primitives::PrimitiveKind<Self::VertexData>>::Rasterizer as euc::rasterizer::Rasterizer>::Config
     {
-        EucCullMode::Back
+        self.cull_mode
     }
 
     fn vertex(&self, v: &Self::Vertex) -> ([f32; 4], Self::VertexData) {
@@ -271,11 +283,23 @@ fn build_chunk() -> PaddedChunk<MyBlock> {
         }
     }
 
+    // Sugar cane stalks (3 blocks tall).
+    for &(sx, sz) in &[(5, 5), (5, 6), (6, 5), (10, 10), (10, 11)] {
+        for y in 1..4 {
+            chunk.set(sx, y, sz, MyBlock::SugarCane);
+        }
+    }
+
+    // Cobwebs in the upper corners between pillars.
+    for &(cx, cz) in &[(3, 3), (3, 12), (12, 3), (12, 12)] {
+        chunk.set(cx, 5, cz, MyBlock::Cobweb);
+    }
+
     chunk
 }
 
-/// Convert voxmesh quads into triangle vertices suitable for euc.
-fn quads_to_vertices(quads: &Quads, chunk: &PaddedChunk<MyBlock>) -> Vec<Vertex> {
+/// Convert axis-aligned voxmesh quads into triangle vertices suitable for euc.
+fn face_quads_to_vertices(quads: &Quads, chunk: &PaddedChunk<MyBlock>) -> Vec<Vertex> {
     let mut verts = Vec::new();
 
     for face in Face::ALL {
@@ -324,6 +348,69 @@ fn quads_to_vertices(quads: &Quads, chunk: &PaddedChunk<MyBlock>) -> Vec<Vertex>
     verts
 }
 
+/// Convert diagonal voxmesh quads into triangle vertices suitable for euc.
+/// These are rendered two-sided (no backface culling).
+fn diagonal_quads_to_vertices(quads: &Quads, chunk: &PaddedChunk<MyBlock>) -> Vec<Vertex> {
+    let mut verts = Vec::new();
+
+    for diag in DiagonalFace::ALL {
+        for quad in &quads.diagonals[diag.index()] {
+            // Sample the chunk at the quad's center to determine block type
+            // and stretch. Use stretch=0 positions to find the block center.
+            let positions_0 = quad.diagonal_positions(diag, 0);
+            let center_x = (positions_0[0].x + positions_0[1].x) * 0.5;
+            let center_z = (positions_0[0].z + positions_0[1].z) * 0.5;
+            let base_y = positions_0[0].y;
+            let sample_x = center_x.floor().max(0.0) as usize;
+            let sample_y = base_y.floor().max(0.0) as usize;
+            let sample_z = center_z.floor().max(0.0) as usize;
+            let block = *chunk.get_padded(
+                (sample_x + PADDING).min(PADDED - 1),
+                (sample_y + PADDING).min(PADDED - 1),
+                (sample_z + PADDING).min(PADDED - 1),
+            );
+
+            let stretch = match block.shape() {
+                Shape::Cross(s) => s,
+                _ => 0,
+            };
+
+            let positions = quad.diagonal_positions(diag, stretch);
+            let uvs = quad.diagonal_texture_coordinates();
+
+            // Compute a face normal from the quad vertices.
+            let e1 = Vec3::new(
+                positions[1].x - positions[0].x,
+                positions[1].y - positions[0].y,
+                positions[1].z - positions[0].z,
+            );
+            let e2 = Vec3::new(
+                positions[3].x - positions[0].x,
+                positions[3].y - positions[0].y,
+                positions[3].z - positions[0].z,
+            );
+            let normal = Vec3::cross(e1, e2).normalized();
+
+            let make_vert = |i: usize| Vertex {
+                pos: Vec4::new(positions[i].x, positions[i].y, positions[i].z, 1.0),
+                uv: Vec2::new(uvs[i].x, uvs[i].y),
+                normal,
+                block,
+            };
+
+            verts.push(make_vert(0));
+            verts.push(make_vert(1));
+            verts.push(make_vert(2));
+
+            verts.push(make_vert(0));
+            verts.push(make_vert(2));
+            verts.push(make_vert(3));
+        }
+    }
+
+    verts
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -341,7 +428,8 @@ fn main() {
         quads.total() * 2,
     );
 
-    let vertices = quads_to_vertices(&quads, &chunk);
+    let face_vertices = face_quads_to_vertices(&quads, &chunk);
+    let diag_vertices = diagonal_quads_to_vertices(&quads, &chunk);
 
     // Camera: look at the chunk center from an elevated angle.
     let center = Vec3::new(8.0, 3.0, 8.0);
@@ -368,10 +456,14 @@ fn main() {
         }
     }
 
-    let pipeline = ChunkPipeline { mvp, atlas: &atlas };
+    let pipeline = ChunkPipeline {
+        mvp,
+        atlas: &atlas,
+        cull_mode: EucCullMode::Back,
+    };
 
     // Render opaque geometry first.
-    let opaque_verts: Vec<&Vertex> = vertices
+    let opaque_verts: Vec<&Vertex> = face_vertices
         .iter()
         .filter(|v| {
             matches!(
@@ -384,8 +476,19 @@ fn main() {
         pipeline.render(opaque_verts.iter().map(|v| *v), &mut color, &mut depth);
     }
 
+    // Diagonal (cross-shaped) geometry — rendered two-sided.
+    if !diag_vertices.is_empty() {
+        let diag_pipeline = ChunkPipeline {
+            mvp,
+            atlas: &atlas,
+            cull_mode: EucCullMode::None,
+        };
+        let diag_refs: Vec<&Vertex> = diag_vertices.iter().collect();
+        diag_pipeline.render(diag_refs.iter().map(|v| *v), &mut color, &mut depth);
+    }
+
     // Then transparent geometry (glass, leaves).
-    let transparent_verts: Vec<&Vertex> = vertices
+    let transparent_verts: Vec<&Vertex> = face_vertices
         .iter()
         .filter(|v| matches!(v.block, MyBlock::Glass | MyBlock::Leaves))
         .collect();

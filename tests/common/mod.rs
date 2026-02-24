@@ -10,7 +10,9 @@ pub enum TestBlock {
     Glass,
     Leaves,
     UpperSlab, // PosY slab, thickness 8
-    LowerSlab, // NegY slab, thickness 8
+    LowerSlab,  // NegY slab, thickness 8
+    SugarCane,  // Cross(0) — diagonal billboard, no stretch
+    Cobweb,     // Cross(4) — diagonal billboard, stretched
 }
 
 impl Block for TestBlock {
@@ -24,6 +26,8 @@ impl Block for TestBlock {
                 face: Face::NegY,
                 thickness: 8,
             }),
+            TestBlock::SugarCane => Shape::Cross(0),
+            TestBlock::Cobweb => Shape::Cross(4),
             _ => Shape::WholeBlock,
         }
     }
@@ -32,7 +36,9 @@ impl Block for TestBlock {
         match self {
             TestBlock::Air => CullMode::Empty,
             TestBlock::Glass => CullMode::TransparentMerged,
-            TestBlock::Leaves => CullMode::TransparentUnmerged,
+            TestBlock::Leaves | TestBlock::SugarCane | TestBlock::Cobweb => {
+                CullMode::TransparentUnmerged
+            }
             _ => CullMode::Opaque,
         }
     }
