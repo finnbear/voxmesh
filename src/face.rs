@@ -80,6 +80,48 @@ impl Face {
     ];
 }
 
+/// Any face that a quad can belong to: either an axis-aligned [`Face`] or a
+/// [`DiagonalFace`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuadFace {
+    Aligned(Face),
+    Diagonal(DiagonalFace),
+}
+
+impl QuadFace {
+    pub const ALL: [QuadFace; 8] = [
+        QuadFace::Aligned(Face::PosX),
+        QuadFace::Aligned(Face::NegX),
+        QuadFace::Aligned(Face::PosY),
+        QuadFace::Aligned(Face::NegY),
+        QuadFace::Aligned(Face::PosZ),
+        QuadFace::Aligned(Face::NegZ),
+        QuadFace::Diagonal(DiagonalFace::A),
+        QuadFace::Diagonal(DiagonalFace::B),
+    ];
+
+    /// Whether this face requires two-sided (backface-culling-disabled)
+    /// rendering.
+    #[inline]
+    pub fn is_diagonal(self) -> bool {
+        matches!(self, QuadFace::Diagonal(_))
+    }
+}
+
+impl From<Face> for QuadFace {
+    #[inline]
+    fn from(f: Face) -> Self {
+        QuadFace::Aligned(f)
+    }
+}
+
+impl From<DiagonalFace> for QuadFace {
+    #[inline]
+    fn from(d: DiagonalFace) -> Self {
+        QuadFace::Diagonal(d)
+    }
+}
+
 /// One of the two diagonal planes in an X-shaped billboard.
 ///
 /// Viewed from above (looking down -Y), the two planes form an X:

@@ -2,7 +2,7 @@ use glam::{UVec2, UVec3, Vec2, Vec3};
 
 use crate::block::{Block, CrossStretch, CullMode, FULL_THICKNESS, Shape};
 use crate::chunk::{CHUNK_SIZE, PADDED, PADDING, PaddedChunk};
-use crate::face::{Axis, DiagonalFace, Face};
+use crate::face::{Axis, DiagonalFace, Face, QuadFace};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Quad {
@@ -24,6 +24,39 @@ fn face_tangents(face: Face) -> (Vec3, Vec3) {
 }
 
 impl Quad {
+    /// Returns the minimum voxel coordinate (not including padding) of the
+    /// block that produced this quad. Use this to look up the block type in a
+    /// chunk or flat voxel array.
+    ///
+    /// `face` must match the face under which this quad was generated (an
+    /// axis-aligned [`Face`] for quads from [`Quads::faces`], or a
+    /// [`DiagonalFace`] for quads from [`Quads::diagonals`]).
+    pub fn voxel_position(&self, face: impl Into<QuadFace>) -> UVec3 {
+        let ft = FULL_THICKNESS;
+        let pad = PADDING as u32;
+        match face.into() {
+            QuadFace::Aligned(f) => {
+                let (normal_idx, _, _) = face_axis_indices(f);
+                let mut result = UVec3::ZERO;
+                for axis in 0..3 {
+                    let o = self.origin_padded[axis];
+                    if axis == normal_idx && f.is_positive() {
+                        // Positive faces sit at the far edge; step back.
+                        result[axis] = (o - 1) / ft - pad;
+                    } else {
+                        result[axis] = o / ft - pad;
+                    }
+                }
+                result
+            }
+            QuadFace::Diagonal(_) => UVec3::new(
+                self.origin_padded.x / ft - pad,
+                self.origin_padded.y / ft - pad,
+                self.origin_padded.z / ft - pad,
+            ),
+        }
+    }
+
     pub fn positions(&self, face: Face) -> [Vec3; 4] {
         let scale = 1.0 / FULL_THICKNESS as f32;
         let pad = PADDING as f32;
@@ -344,6 +377,25 @@ impl Quads {
     pub fn total(&self) -> usize {
         self.faces.iter().map(|v| v.len()).sum::<usize>()
             + self.diagonals.iter().map(|v| v.len()).sum::<usize>()
+    }
+
+    /// Returns the quad list for the given [`QuadFace`].
+    ///
+    /// This allows iterating all faces uniformly via [`QuadFace::ALL`]:
+    ///
+    /// ```ignore
+    /// for qf in QuadFace::ALL {
+    ///     for quad in quads.get(qf) {
+    ///         let vp = quad.voxel_position(qf);
+    ///         // …
+    ///     }
+    /// }
+    /// ```
+    pub fn get(&self, face: QuadFace) -> &[Quad] {
+        match face {
+            QuadFace::Aligned(f) => &self.faces[f.index()],
+            QuadFace::Diagonal(d) => &self.diagonals[d.index()],
+        }
     }
 }
 

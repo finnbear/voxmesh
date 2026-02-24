@@ -126,6 +126,8 @@ struct Vertex {
     normal: Vec3<f32>,
     // Which block produced this quad (used for atlas lookup).
     block: MyBlock,
+    // Whether this vertex belongs to a diagonal (two-sided) quad.
+    diagonal: bool,
 }
 
 // Interpolated data passed from vertex to fragment shader.
@@ -298,104 +300,58 @@ fn build_chunk() -> PaddedChunk<MyBlock> {
     chunk
 }
 
-/// Convert axis-aligned voxmesh quads into triangle vertices suitable for euc.
-fn face_quads_to_vertices(quads: &Quads, chunk: &PaddedChunk<MyBlock>) -> Vec<Vertex> {
+/// Convert voxmesh quads into triangle vertices suitable for euc.
+/// Diagonal quads are tagged so the caller can render them two-sided.
+fn quads_to_vertices(quads: &Quads, chunk: &PaddedChunk<MyBlock>) -> Vec<Vertex> {
     let mut verts = Vec::new();
 
-    for face in Face::ALL {
-        let normal_glam = face.normal();
-        let normal = Vec3::new(
-            normal_glam.x as f32,
-            normal_glam.y as f32,
-            normal_glam.z as f32,
-        );
-
-        for quad in &quads.faces[face.index()] {
-            let positions = quad.positions(face);
-            let uvs = quad.texture_coordinates(face, Axis::X, false);
-
-            // Determine which block this quad belongs to by sampling the chunk
-            // at the quad's interior. We use the first vertex position shifted
-            // inward by half the normal.
-            let p = positions[0];
-            let sample_x = (p.x - 0.5 * normal.x).floor().max(0.0) as usize;
-            let sample_y = (p.y - 0.5 * normal.y).floor().max(0.0) as usize;
-            let sample_z = (p.z - 0.5 * normal.z).floor().max(0.0) as usize;
+    for qf in QuadFace::ALL {
+        for quad in quads.get(qf) {
+            let vp = quad.voxel_position(qf);
             let block = *chunk.get_padded(
-                (sample_x + PADDING).min(PADDED - 1),
-                (sample_y + PADDING).min(PADDED - 1),
-                (sample_z + PADDING).min(PADDED - 1),
+                vp.x as usize + PADDING,
+                vp.y as usize + PADDING,
+                vp.z as usize + PADDING,
             );
+
+            let (positions, uvs, normal) = match qf {
+                QuadFace::Aligned(face) => {
+                    let positions = quad.positions(face);
+                    let uvs = quad.texture_coordinates(face, Axis::X, false);
+                    let n = face.normal();
+                    let normal = Vec3::new(n.x as f32, n.y as f32, n.z as f32);
+                    (positions, uvs, normal)
+                }
+                QuadFace::Diagonal(diag) => {
+                    let stretch = match block.shape() {
+                        Shape::Cross(s) => s,
+                        _ => 0,
+                    };
+                    let positions = quad.diagonal_positions(diag, stretch);
+                    let uvs = quad.diagonal_texture_coordinates();
+                    let e1 = Vec3::new(
+                        positions[1].x - positions[0].x,
+                        positions[1].y - positions[0].y,
+                        positions[1].z - positions[0].z,
+                    );
+                    let e2 = Vec3::new(
+                        positions[3].x - positions[0].x,
+                        positions[3].y - positions[0].y,
+                        positions[3].z - positions[0].z,
+                    );
+                    let normal = Vec3::cross(e1, e2).normalized();
+                    (positions, uvs, normal)
+                }
+            };
 
             // Two triangles per quad: (0,1,2) and (0,2,3).
+            let diagonal = qf.is_diagonal();
             let make_vert = |i: usize| Vertex {
                 pos: Vec4::new(positions[i].x, positions[i].y, positions[i].z, 1.0),
                 uv: Vec2::new(uvs[i].x, uvs[i].y),
                 normal,
                 block,
-            };
-
-            verts.push(make_vert(0));
-            verts.push(make_vert(1));
-            verts.push(make_vert(2));
-
-            verts.push(make_vert(0));
-            verts.push(make_vert(2));
-            verts.push(make_vert(3));
-        }
-    }
-
-    verts
-}
-
-/// Convert diagonal voxmesh quads into triangle vertices suitable for euc.
-/// These are rendered two-sided (no backface culling).
-fn diagonal_quads_to_vertices(quads: &Quads, chunk: &PaddedChunk<MyBlock>) -> Vec<Vertex> {
-    let mut verts = Vec::new();
-
-    for diag in DiagonalFace::ALL {
-        for quad in &quads.diagonals[diag.index()] {
-            // Sample the chunk at the quad's center to determine block type
-            // and stretch. Use stretch=0 positions to find the block center.
-            let positions_0 = quad.diagonal_positions(diag, 0);
-            let center_x = (positions_0[0].x + positions_0[1].x) * 0.5;
-            let center_z = (positions_0[0].z + positions_0[1].z) * 0.5;
-            let base_y = positions_0[0].y;
-            let sample_x = center_x.floor().max(0.0) as usize;
-            let sample_y = base_y.floor().max(0.0) as usize;
-            let sample_z = center_z.floor().max(0.0) as usize;
-            let block = *chunk.get_padded(
-                (sample_x + PADDING).min(PADDED - 1),
-                (sample_y + PADDING).min(PADDED - 1),
-                (sample_z + PADDING).min(PADDED - 1),
-            );
-
-            let stretch = match block.shape() {
-                Shape::Cross(s) => s,
-                _ => 0,
-            };
-
-            let positions = quad.diagonal_positions(diag, stretch);
-            let uvs = quad.diagonal_texture_coordinates();
-
-            // Compute a face normal from the quad vertices.
-            let e1 = Vec3::new(
-                positions[1].x - positions[0].x,
-                positions[1].y - positions[0].y,
-                positions[1].z - positions[0].z,
-            );
-            let e2 = Vec3::new(
-                positions[3].x - positions[0].x,
-                positions[3].y - positions[0].y,
-                positions[3].z - positions[0].z,
-            );
-            let normal = Vec3::cross(e1, e2).normalized();
-
-            let make_vert = |i: usize| Vertex {
-                pos: Vec4::new(positions[i].x, positions[i].y, positions[i].z, 1.0),
-                uv: Vec2::new(uvs[i].x, uvs[i].y),
-                normal,
-                block,
+                diagonal,
             };
 
             verts.push(make_vert(0));
@@ -428,8 +384,7 @@ fn main() {
         quads.total() * 2,
     );
 
-    let face_vertices = face_quads_to_vertices(&quads, &chunk);
-    let diag_vertices = diagonal_quads_to_vertices(&quads, &chunk);
+    let vertices = quads_to_vertices(&quads, &chunk);
 
     // Camera: look at the chunk center from an elevated angle.
     let center = Vec3::new(8.0, 3.0, 8.0);
@@ -461,15 +416,21 @@ fn main() {
         atlas: &atlas,
         cull_mode: EucCullMode::Back,
     };
+    let diag_pipeline = ChunkPipeline {
+        mvp,
+        atlas: &atlas,
+        cull_mode: EucCullMode::None,
+    };
 
     // Render opaque geometry first.
-    let opaque_verts: Vec<&Vertex> = face_vertices
+    let opaque_verts: Vec<&Vertex> = vertices
         .iter()
         .filter(|v| {
-            matches!(
-                v.block,
-                MyBlock::Cobblestone | MyBlock::CobbleSlab | MyBlock::Clay
-            )
+            !v.diagonal
+                && matches!(
+                    v.block,
+                    MyBlock::Cobblestone | MyBlock::CobbleSlab | MyBlock::Clay
+                )
         })
         .collect();
     if !opaque_verts.is_empty() {
@@ -477,20 +438,15 @@ fn main() {
     }
 
     // Diagonal (cross-shaped) geometry — rendered two-sided.
-    if !diag_vertices.is_empty() {
-        let diag_pipeline = ChunkPipeline {
-            mvp,
-            atlas: &atlas,
-            cull_mode: EucCullMode::None,
-        };
-        let diag_refs: Vec<&Vertex> = diag_vertices.iter().collect();
-        diag_pipeline.render(diag_refs.iter().map(|v| *v), &mut color, &mut depth);
+    let diag_verts: Vec<&Vertex> = vertices.iter().filter(|v| v.diagonal).collect();
+    if !diag_verts.is_empty() {
+        diag_pipeline.render(diag_verts.iter().map(|v| *v), &mut color, &mut depth);
     }
 
     // Then transparent geometry (glass, leaves).
-    let transparent_verts: Vec<&Vertex> = face_vertices
+    let transparent_verts: Vec<&Vertex> = vertices
         .iter()
-        .filter(|v| matches!(v.block, MyBlock::Glass | MyBlock::Leaves))
+        .filter(|v| !v.diagonal && matches!(v.block, MyBlock::Glass | MyBlock::Leaves))
         .collect();
     if !transparent_verts.is_empty() {
         pipeline.render(transparent_verts.iter().map(|v| *v), &mut color, &mut depth);
