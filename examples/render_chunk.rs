@@ -37,6 +37,7 @@ enum MyBlock {
     Shrub,     // Cross(0) — short diagonal billboard
     Ladder,    // Facade(PosX) — flat face on +X side
     Rail,      // Facade(NegY) — flat face on bottom
+    Debug,     // WholeBlock with UV debug texture
 }
 
 impl Block for MyBlock {
@@ -57,7 +58,9 @@ impl Block for MyBlock {
     fn cull_mode(&self) -> CullMode {
         match self {
             MyBlock::Air => CullMode::Empty,
-            MyBlock::Cobblestone | MyBlock::Clay | MyBlock::CobbleSlab => CullMode::Opaque,
+            MyBlock::Cobblestone | MyBlock::Clay | MyBlock::CobbleSlab | MyBlock::Debug => {
+                CullMode::Opaque
+            }
             MyBlock::Glass => CullMode::TransparentMerged,
             MyBlock::Leaves
             | MyBlock::SugarCane
@@ -95,6 +98,7 @@ fn build_atlas() -> Buffer2d<Rgba<f32>> {
         "examples/shrub.png",
         "examples/ladder.png",
         "examples/rail_straight.png",
+        "examples/debug.png",
     ]
     .iter()
     .map(|p| load_tile(p))
@@ -125,6 +129,7 @@ fn atlas_u_offset(block: MyBlock) -> f32 {
         MyBlock::Shrub => 6.0,
         MyBlock::Ladder => 7.0,
         MyBlock::Rail => 8.0,
+        MyBlock::Debug => 9.0,
         MyBlock::Air => 0.0,
     }
 }
@@ -228,7 +233,7 @@ impl<'r, 'a: 'r> Pipeline<'r> for ChunkPipeline<'a> {
         let tile_offset = vs.atlas_u_offset.round();
         let atlas_size = self.atlas.size();
         let px = ((tile_offset * 16.0 + u_frac * 15.999) as usize).min(atlas_size[0] - 1);
-        let py = (v_frac * 15.999) as usize;
+        let py = ((1.0 - v_frac) * 15.999) as usize;
 
         let texel = self.atlas.read([px, py]);
 
@@ -272,7 +277,7 @@ fn build_chunk() -> PaddedChunk<MyBlock> {
     let pillars = [(2, 2), (2, 13), (13, 2), (13, 13)];
     for &(px, pz) in &pillars {
         for y in 1..6 {
-            chunk.set(px, y, pz, MyBlock::CobbleSlab);
+            chunk.set(px, y, pz, MyBlock::Clay);
         }
     }
 
@@ -287,6 +292,10 @@ fn build_chunk() -> PaddedChunk<MyBlock> {
     for &(cx, cz) in &[(3, 3), (3, 12), (12, 3), (12, 12)] {
         chunk.set(cx, 5, cz, MyBlock::Cobweb);
     }
+
+    // Debug blocks for UV visualization.
+    chunk.set(7, 1, 5, MyBlock::Debug);
+    chunk.set(9, 1, 5, MyBlock::Debug);
 
     // Shrubs scattered around.
     for &(sx, sz) in &[(1, 3), (6, 10), (10, 6), (9, 11), (4, 4)] {
@@ -439,7 +448,7 @@ fn main() {
             !v.two_sided
                 && matches!(
                     v.block,
-                    MyBlock::Cobblestone | MyBlock::CobbleSlab | MyBlock::Clay
+                    MyBlock::Cobblestone | MyBlock::CobbleSlab | MyBlock::Clay | MyBlock::Debug
                 )
         })
         .collect();
