@@ -34,6 +34,7 @@ enum MyBlock {
     Leaves,
     SugarCane, // Cross(0) — diagonal billboard
     Cobweb,    // Cross(4) — stretched diagonal billboard
+    Shrub,     // Cross(0) — short diagonal billboard
     Ladder,    // Facade(PosX) — flat face on +X side
     Rail,      // Facade(NegY) — flat face on bottom
 }
@@ -45,7 +46,7 @@ impl Block for MyBlock {
                 face: Face::NegY,
                 thickness: 8,
             }),
-            MyBlock::SugarCane => Shape::Cross(0),
+            MyBlock::SugarCane | MyBlock::Shrub => Shape::Cross(0),
             MyBlock::Cobweb => Shape::Cross(4),
             MyBlock::Ladder => Shape::Facade(Face::PosX),
             MyBlock::Rail => Shape::Facade(Face::NegY),
@@ -61,6 +62,7 @@ impl Block for MyBlock {
             MyBlock::Leaves
             | MyBlock::SugarCane
             | MyBlock::Cobweb
+            | MyBlock::Shrub
             | MyBlock::Ladder
             | MyBlock::Rail => CullMode::TransparentUnmerged,
         }
@@ -90,6 +92,7 @@ fn build_atlas() -> Buffer2d<Rgba<f32>> {
         "examples/leaves.png",
         "examples/sugarcane.png",
         "examples/cobweb.png",
+        "examples/shrub.png",
         "examples/ladder.png",
         "examples/rail_straight.png",
     ]
@@ -119,8 +122,9 @@ fn atlas_u_offset(block: MyBlock) -> f32 {
         MyBlock::Leaves => 3.0,
         MyBlock::SugarCane => 4.0,
         MyBlock::Cobweb => 5.0,
-        MyBlock::Ladder => 6.0,
-        MyBlock::Rail => 7.0,
+        MyBlock::Shrub => 6.0,
+        MyBlock::Ladder => 7.0,
+        MyBlock::Rail => 8.0,
         MyBlock::Air => 0.0,
     }
 }
@@ -272,6 +276,34 @@ fn build_chunk() -> PaddedChunk<MyBlock> {
         }
     }
 
+    // Sugar cane stalks (3 blocks tall).
+    for &(sx, sz) in &[(1, 1), (1, 2), (2, 1), (14, 14), (14, 15)] {
+        for y in 1..4 {
+            chunk.set(sx, y, sz, MyBlock::SugarCane);
+        }
+    }
+
+    // Cobwebs in the upper corners between pillars.
+    for &(cx, cz) in &[(3, 3), (3, 12), (12, 3), (12, 12)] {
+        chunk.set(cx, 5, cz, MyBlock::Cobweb);
+    }
+
+    // Shrubs scattered around.
+    for &(sx, sz) in &[(1, 3), (6, 10), (10, 6), (9, 11), (4, 4)] {
+        chunk.set(sx, 1, sz, MyBlock::Shrub);
+    }
+
+    // Ladders on the +X face of clay pillars.
+    for y in 1..6 {
+        chunk.set(3, y, 2, MyBlock::Ladder);
+        chunk.set(3, y, 13, MyBlock::Ladder);
+    }
+
+    // Rails on the floor along the slab path.
+    for i in 3..13 {
+        chunk.set(i, 1, 7, MyBlock::Rail);
+    }
+
     // Glass windows between pillars (along edges).
     for i in 3..13 {
         for y in 1..5 {
@@ -293,29 +325,6 @@ fn build_chunk() -> PaddedChunk<MyBlock> {
         for z in 1..15 {
             chunk.set(x, 6, z, MyBlock::Leaves);
         }
-    }
-
-    // Sugar cane stalks (3 blocks tall).
-    for &(sx, sz) in &[(1, 1), (1, 2), (2, 1), (14, 14), (14, 15)] {
-        for y in 1..4 {
-            chunk.set(sx, y, sz, MyBlock::SugarCane);
-        }
-    }
-
-    // Cobwebs in the upper corners between pillars.
-    for &(cx, cz) in &[(3, 3), (3, 12), (12, 3), (12, 12)] {
-        chunk.set(cx, 5, cz, MyBlock::Cobweb);
-    }
-
-    // Ladders on the +X face of clay pillars.
-    for y in 1..6 {
-        chunk.set(3, y, 2, MyBlock::Ladder);
-        chunk.set(3, y, 13, MyBlock::Ladder);
-    }
-
-    // Rails on the floor along the slab path.
-    for i in 3..13 {
-        chunk.set(i, 1, 7, MyBlock::Rail);
     }
 
     chunk

@@ -166,11 +166,12 @@ impl Quad {
             }
             QuadFace::Diagonal(_) => {
                 let v_size = self.size.y as f32 / FULL_THICKNESS as f32;
+                let (v_bottom, v_top) = if flip_v { (0.0, v_size) } else { (v_size, 0.0) };
                 [
-                    Vec2::new(0.0, 0.0),
-                    Vec2::new(1.0, 0.0),
-                    Vec2::new(1.0, v_size),
-                    Vec2::new(0.0, v_size),
+                    Vec2::new(0.0, v_bottom),
+                    Vec2::new(1.0, v_bottom),
+                    Vec2::new(1.0, v_top),
+                    Vec2::new(0.0, v_top),
                 ]
             }
         }
