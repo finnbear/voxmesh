@@ -235,8 +235,8 @@ fn face_axis_indices(face: Face) -> (usize, usize, usize) {
 fn neighbor_covers_face_region<B: Block>(block: &B, neighbor: &B, face: Face) -> bool {
     match neighbor.shape() {
         Shape::WholeBlock => true,
-        // Cross blocks never cover any face region.
-        Shape::Cross(_) => false,
+        // Cross and facade blocks never cover any face region.
+        Shape::Cross(_) | Shape::Facade(_) => false,
         Shape::Slab(n_info) => {
             // The neighbor slab is flush against our face on this boundary
             // only if its slab face equals our face's opposite.
@@ -284,6 +284,21 @@ fn mask_entry_for_shape<B: Block>(
     match block.shape() {
         // Cross blocks have no axis-aligned faces.
         Shape::Cross(_) => return None,
+        // Facade emits exactly one quad on its own face, offset 1/16 inward.
+        Shape::Facade(facade_face) => {
+            if face != facade_face {
+                return None;
+            }
+            let normal_pos = if face.is_positive() { ft - 1 } else { 1 };
+            return Some(MaskEntry {
+                block: *block,
+                normal_pos,
+                u_intra_offset: 0,
+                u_intra_extent: ft,
+                v_intra_offset: 0,
+                v_intra_extent: ft,
+            });
+        }
         Shape::WholeBlock => {
             let normal_pos = if face.is_positive() { ft } else { 0 };
             Some(MaskEntry {
@@ -358,7 +373,7 @@ fn compute_slab_mask_entry<B: Block>(
 ) -> Option<MaskEntry<B>> {
     let info = match block.shape() {
         Shape::Slab(info) => info,
-        Shape::WholeBlock | Shape::Cross(_) => unreachable!(),
+        Shape::WholeBlock | Shape::Cross(_) | Shape::Facade(_) => unreachable!(),
     };
 
     // For the flush face of the slab along its own axis, check neighbor culling.
@@ -604,6 +619,10 @@ pub fn greedy_mesh_into<B: Block>(chunk: &PaddedChunk<B>, quads: &mut Quads) {
                     } else if matches!(block.shape(), Shape::Cross(_)) {
                         // Cross blocks are handled in a separate pass.
                         None
+                    } else if matches!(block.shape(), Shape::Facade(_)) {
+                        // Facade quads are offset 1/16 inward, never at the
+                        // block boundary, so skip neighbor culling entirely.
+                        mask_entry_for_shape(block, face, u_idx, v_idx)
                     } else {
                         compute_slab_mask_entry(block, neighbor, face, u_idx, v_idx)
                     };

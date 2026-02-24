@@ -91,7 +91,7 @@ fn cross_does_not_cull_adjacent_opaque_block() {
     // Stone should still have all 6 faces (cross doesn't cull it).
     // The face toward the cross block (NegX) should be present.
     let stone_neg_x = q.faces[Face::NegX.index()].iter().any(|quad| {
-        let verts = quad.positions(Face::NegX);
+        let verts = quad.positions(Face::NegX, 0);
         (verts[0].x - 1.0).abs() < 1e-6
     });
     assert!(stone_neg_x, "stone NegX face should be present");
@@ -103,7 +103,7 @@ fn cross_diagonal_positions_span_unit_block() {
 
     for diag in DiagonalFace::ALL {
         let quad = &q.diagonals[diag.index()][0];
-        let verts = quad.diagonal_positions(diag, 0);
+        let verts = quad.positions(diag, 0);
 
         // Y should span [0, 1].
         let y_min = verts.iter().map(|v| v.y).fold(f32::INFINITY, f32::min);
@@ -152,7 +152,7 @@ fn merged_cross_diagonal_height_spans_multiple_blocks() {
 
     for diag in DiagonalFace::ALL {
         let quad = &q.diagonals[diag.index()][0];
-        let verts = quad.diagonal_positions(diag, 0);
+        let verts = quad.positions(diag, 0);
 
         let y_min = verts.iter().map(|v| v.y).fold(f32::INFINITY, f32::min);
         let y_max = verts.iter().map(|v| v.y).fold(f32::NEG_INFINITY, f32::max);
@@ -176,7 +176,7 @@ fn stretched_cross_extends_beyond_block_boundary() {
     // Cobweb has stretch=4 (4/16 = 0.25 extra on each side).
     for diag in DiagonalFace::ALL {
         let quad = &q.diagonals[diag.index()][0];
-        let verts = quad.diagonal_positions(diag, 4);
+        let verts = quad.positions(diag, 4);
 
         // The diagonal extent should be wider than 1 block.
         let x_min = verts.iter().map(|v| v.x).fold(f32::INFINITY, f32::min);
@@ -215,7 +215,7 @@ fn cross_texture_coordinates_span_one_by_one() {
     let q = block_faces(&TestBlock::SugarCane);
     for diag in DiagonalFace::ALL {
         let quad = &q.diagonals[diag.index()][0];
-        let uvs = quad.diagonal_texture_coordinates();
+        let uvs = quad.texture_coordinates(diag, Axis::X, false);
         assert_eq!(uvs[0], glam::Vec2::new(0.0, 0.0));
         assert_eq!(uvs[1], glam::Vec2::new(1.0, 0.0));
         assert_eq!(uvs[2], glam::Vec2::new(1.0, 1.0));
@@ -232,7 +232,7 @@ fn merged_cross_texture_coordinates_scale_vertically() {
     ]);
     for diag in DiagonalFace::ALL {
         let quad = &q.diagonals[diag.index()][0];
-        let uvs = quad.diagonal_texture_coordinates();
+        let uvs = quad.texture_coordinates(diag, Axis::X, false);
         // v_size should be 3.0 (3 blocks tall).
         assert_eq!(uvs[2], glam::Vec2::new(1.0, 3.0));
         assert_eq!(uvs[3], glam::Vec2::new(0.0, 3.0));

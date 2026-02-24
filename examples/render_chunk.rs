@@ -34,6 +34,8 @@ enum MyBlock {
     Leaves,
     SugarCane, // Cross(0) — diagonal billboard
     Cobweb,    // Cross(4) — stretched diagonal billboard
+    Ladder,    // Facade(PosX) — flat face on +X side
+    Rail,      // Facade(NegY) — flat face on bottom
 }
 
 impl Block for MyBlock {
@@ -45,6 +47,8 @@ impl Block for MyBlock {
             }),
             MyBlock::SugarCane => Shape::Cross(0),
             MyBlock::Cobweb => Shape::Cross(4),
+            MyBlock::Ladder => Shape::Facade(Face::PosX),
+            MyBlock::Rail => Shape::Facade(Face::NegY),
             _ => Shape::WholeBlock,
         }
     }
@@ -54,7 +58,11 @@ impl Block for MyBlock {
             MyBlock::Air => CullMode::Empty,
             MyBlock::Cobblestone | MyBlock::Clay | MyBlock::CobbleSlab => CullMode::Opaque,
             MyBlock::Glass => CullMode::TransparentMerged,
-            MyBlock::Leaves | MyBlock::SugarCane | MyBlock::Cobweb => CullMode::TransparentUnmerged,
+            MyBlock::Leaves
+            | MyBlock::SugarCane
+            | MyBlock::Cobweb
+            | MyBlock::Ladder
+            | MyBlock::Rail => CullMode::TransparentUnmerged,
         }
     }
 }
@@ -82,6 +90,8 @@ fn build_atlas() -> Buffer2d<Rgba<f32>> {
         "examples/leaves.png",
         "examples/sugarcane.png",
         "examples/cobweb.png",
+        "examples/ladder.png",
+        "examples/rail_straight.png",
     ]
     .iter()
     .map(|p| load_tile(p))
@@ -109,6 +119,8 @@ fn atlas_u_offset(block: MyBlock) -> f32 {
         MyBlock::Leaves => 3.0,
         MyBlock::SugarCane => 4.0,
         MyBlock::Cobweb => 5.0,
+        MyBlock::Ladder => 6.0,
+        MyBlock::Rail => 7.0,
         MyBlock::Air => 0.0,
     }
 }
@@ -124,8 +136,8 @@ struct Vertex {
     normal: Vec3<f32>,
     // Which block produced this quad (used for atlas lookup).
     block: MyBlock,
-    // Whether this vertex belongs to a diagonal (two-sided) quad.
-    diagonal: bool,
+    // Whether this vertex belongs to a two-sided quad (diagonals, facades).
+    two_sided: bool,
 }
 
 // Interpolated data passed from vertex to fragment shader.
@@ -295,6 +307,17 @@ fn build_chunk() -> PaddedChunk<MyBlock> {
         chunk.set(cx, 5, cz, MyBlock::Cobweb);
     }
 
+    // Ladders on the +X face of clay pillars.
+    for y in 1..6 {
+        chunk.set(3, y, 2, MyBlock::Ladder);
+        chunk.set(3, y, 13, MyBlock::Ladder);
+    }
+
+    // Rails on the floor along the slab path.
+    for i in 3..13 {
+        chunk.set(i, 1, 7, MyBlock::Rail);
+    }
+
     chunk
 }
 
@@ -315,31 +338,21 @@ fn quads_to_vertices(quads: &Quads, chunk: &PaddedChunk<MyBlock>) -> Vec<Vertex>
             let n = qf.normal();
             let normal = Vec3::new(n.x, n.y, n.z);
 
-            let (positions, uvs) = match qf {
-                QuadFace::Aligned(face) => (
-                    quad.positions(face),
-                    quad.texture_coordinates(face, Axis::X, false),
-                ),
-                QuadFace::Diagonal(diag) => {
-                    let stretch = match block.shape() {
-                        Shape::Cross(s) => s,
-                        _ => 0,
-                    };
-                    (
-                        quad.diagonal_positions(diag, stretch),
-                        quad.diagonal_texture_coordinates(),
-                    )
-                }
+            let stretch = match block.shape() {
+                Shape::Cross(s) => s,
+                _ => 0,
             };
+            let positions = quad.positions(qf, stretch);
+            let uvs = quad.texture_coordinates(qf, Axis::X, false);
 
             // Two triangles per quad: (0,1,2) and (0,2,3).
-            let diagonal = qf.is_diagonal();
+            let two_sided = qf.is_diagonal() || matches!(block.shape(), Shape::Facade(_));
             let make_vert = |i: usize| Vertex {
                 pos: Vec4::new(positions[i].x, positions[i].y, positions[i].z, 1.0),
                 uv: Vec2::new(uvs[i].x, uvs[i].y),
                 normal,
                 block,
-                diagonal,
+                two_sided,
             };
 
             verts.push(make_vert(0));
@@ -414,7 +427,7 @@ fn main() {
     let opaque_verts: Vec<&Vertex> = vertices
         .iter()
         .filter(|v| {
-            !v.diagonal
+            !v.two_sided
                 && matches!(
                     v.block,
                     MyBlock::Cobblestone | MyBlock::CobbleSlab | MyBlock::Clay
@@ -425,16 +438,16 @@ fn main() {
         pipeline.render(opaque_verts.iter().map(|v| *v), &mut color, &mut depth);
     }
 
-    // Diagonal (cross-shaped) geometry — rendered two-sided.
-    let diag_verts: Vec<&Vertex> = vertices.iter().filter(|v| v.diagonal).collect();
-    if !diag_verts.is_empty() {
-        diag_pipeline.render(diag_verts.iter().map(|v| *v), &mut color, &mut depth);
+    // Two-sided geometry (cross-shaped billboards, facades) — no backface culling.
+    let two_sided_verts: Vec<&Vertex> = vertices.iter().filter(|v| v.two_sided).collect();
+    if !two_sided_verts.is_empty() {
+        diag_pipeline.render(two_sided_verts.iter().map(|v| *v), &mut color, &mut depth);
     }
 
     // Then transparent geometry (glass, leaves).
     let transparent_verts: Vec<&Vertex> = vertices
         .iter()
-        .filter(|v| !v.diagonal && matches!(v.block, MyBlock::Glass | MyBlock::Leaves))
+        .filter(|v| !v.two_sided && matches!(v.block, MyBlock::Glass | MyBlock::Leaves))
         .collect();
     if !transparent_verts.is_empty() {
         pipeline.render(transparent_verts.iter().map(|v| *v), &mut color, &mut depth);

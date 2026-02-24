@@ -48,6 +48,9 @@ pub enum Shape {
     /// X-shaped diagonal billboard (e.g. sugar cane, cobwebs).
     /// Two vertical quads crossing diagonally through the block center.
     Cross(CrossStretch),
+    /// Flat zero-thickness face hugging one side of the block, offset
+    /// 1/16th inward. Rendered double-sided (e.g. ladders, rails).
+    Facade(Face),
 }
 
 pub trait Block: Copy + PartialEq + Debug {

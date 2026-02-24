@@ -13,6 +13,8 @@ pub enum TestBlock {
     LowerSlab, // NegY slab, thickness 8
     SugarCane, // Cross(0) — diagonal billboard, no stretch
     Cobweb,    // Cross(4) — diagonal billboard, stretched
+    Ladder,    // Facade(PosX) — flat face on +X side
+    Rail,      // Facade(NegY) — flat face on bottom
 }
 
 impl Block for TestBlock {
@@ -28,6 +30,8 @@ impl Block for TestBlock {
             }),
             TestBlock::SugarCane => Shape::Cross(0),
             TestBlock::Cobweb => Shape::Cross(4),
+            TestBlock::Ladder => Shape::Facade(Face::PosX),
+            TestBlock::Rail => Shape::Facade(Face::NegY),
             _ => Shape::WholeBlock,
         }
     }
@@ -36,9 +40,11 @@ impl Block for TestBlock {
         match self {
             TestBlock::Air => CullMode::Empty,
             TestBlock::Glass => CullMode::TransparentMerged,
-            TestBlock::Leaves | TestBlock::SugarCane | TestBlock::Cobweb => {
-                CullMode::TransparentUnmerged
-            }
+            TestBlock::Leaves
+            | TestBlock::SugarCane
+            | TestBlock::Cobweb
+            | TestBlock::Ladder
+            | TestBlock::Rail => CullMode::TransparentUnmerged,
             _ => CullMode::Opaque,
         }
     }
@@ -66,7 +72,7 @@ pub fn face_count(q: &Quads, face: Face) -> usize {
 
 /// Get vertex positions of the first quad on a given face.
 pub fn first_face_positions(q: &Quads, face: Face) -> [glam::Vec3; 4] {
-    q.faces[face.index()][0].positions(face)
+    q.faces[face.index()][0].positions(face, 0)
 }
 
 /// Assert all vertices of the first quad on `face` have `axis_val` on the

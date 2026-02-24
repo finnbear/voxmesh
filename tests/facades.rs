@@ -1,0 +1,171 @@
+mod common;
+
+use common::*;
+use voxmesh::*;
+
+#[test]
+fn single_facade_produces_one_quad() {
+    let q = mesh_single(TestBlock::Ladder);
+    // Only the facade's own face (PosX) should have a quad.
+    assert_eq!(face_count(&q, Face::PosX), 1);
+    for face in [Face::NegX, Face::PosY, Face::NegY, Face::PosZ, Face::NegZ] {
+        assert_eq!(face_count(&q, face), 0, "face {:?} should be empty", face);
+    }
+    // No diagonal quads.
+    for diag in DiagonalFace::ALL {
+        assert_eq!(q.diagonals[diag.index()].len(), 0);
+    }
+    assert_eq!(q.total(), 1);
+}
+
+#[test]
+fn facade_negy_produces_one_quad() {
+    let q = mesh_single(TestBlock::Rail);
+    assert_eq!(face_count(&q, Face::NegY), 1);
+    for face in [Face::PosX, Face::NegX, Face::PosY, Face::PosZ, Face::NegZ] {
+        assert_eq!(face_count(&q, face), 0, "face {:?} should be empty", face);
+    }
+    assert_eq!(q.total(), 1);
+}
+
+#[test]
+fn facade_block_faces_matches_greedy_mesh() {
+    let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
+    chunk.set(0, 0, 0, TestBlock::Ladder);
+    let from_chunk = greedy_mesh(&chunk);
+    let from_block = block_faces(&TestBlock::Ladder);
+    assert_eq!(from_chunk.total(), from_block.total());
+    for face in Face::ALL {
+        assert_eq!(
+            from_chunk.faces[face.index()].len(),
+            from_block.faces[face.index()].len(),
+            "face {:?}",
+            face
+        );
+    }
+}
+
+#[test]
+fn facade_posx_is_offset_from_face() {
+    let q = block_faces(&TestBlock::Ladder);
+    let quad = &q.faces[Face::PosX.index()][0];
+    let verts = quad.positions(Face::PosX, 0);
+
+    // All vertices should have x = 15/16 (offset 1/16 inward from +X face).
+    for (i, v) in verts.iter().enumerate() {
+        assert!(
+            (v.x - 15.0 / 16.0).abs() < 1e-6,
+            "vertex {i} x should be 15/16, got {}",
+            v.x
+        );
+    }
+}
+
+#[test]
+fn facade_negy_is_offset_from_face() {
+    let q = block_faces(&TestBlock::Rail);
+    let quad = &q.faces[Face::NegY.index()][0];
+    let verts = quad.positions(Face::NegY, 0);
+
+    // All vertices should have y = 1/16 (offset 1/16 inward from -Y face).
+    for (i, v) in verts.iter().enumerate() {
+        assert!(
+            (v.y - 1.0 / 16.0).abs() < 1e-6,
+            "vertex {i} y should be 1/16, got {}",
+            v.y
+        );
+    }
+}
+
+#[test]
+fn facade_does_not_cull_neighbor() {
+    // A stone block adjacent to a facade should still have all 6 faces.
+    let q = mesh_with(&[(0, 0, 0, TestBlock::Ladder), (1, 0, 0, TestBlock::Stone)]);
+    // Stone's NegX face (toward the facade) should still be present.
+    let stone_neg_x = q.faces[Face::NegX.index()].iter().any(|quad| {
+        let verts = quad.positions(Face::NegX, 0);
+        (verts[0].x - 1.0).abs() < 1e-6
+    });
+    assert!(stone_neg_x, "stone NegX face should be present");
+}
+
+#[test]
+fn opaque_neighbor_does_not_cull_facade() {
+    // An opaque block next to a facade should not cull it (facade is offset inward).
+    let q = mesh_with(&[(0, 0, 0, TestBlock::Ladder), (1, 0, 0, TestBlock::Stone)]);
+    // The ladder's PosX face should still be present.
+    let has_ladder = q.faces[Face::PosX.index()].iter().any(|quad| {
+        let verts = quad.positions(Face::PosX, 0);
+        (verts[0].x - 15.0 / 16.0).abs() < 1e-6
+    });
+    assert!(has_ladder, "ladder PosX facade should be present");
+}
+
+#[test]
+fn identical_facades_merge_along_v() {
+    // Three ladders stacked vertically (same face PosX) should merge into one quad.
+    let q = mesh_with(&[
+        (0, 0, 0, TestBlock::Ladder),
+        (0, 1, 0, TestBlock::Ladder),
+        (0, 2, 0, TestBlock::Ladder),
+    ]);
+    assert_eq!(
+        face_count(&q, Face::PosX),
+        1,
+        "stacked facades should merge into 1 quad"
+    );
+}
+
+#[test]
+fn identical_facades_merge_along_u() {
+    // Three ladders in a row along Z (same face PosX) should merge into one quad.
+    let q = mesh_with(&[
+        (0, 0, 0, TestBlock::Ladder),
+        (0, 0, 1, TestBlock::Ladder),
+        (0, 0, 2, TestBlock::Ladder),
+    ]);
+    assert_eq!(
+        face_count(&q, Face::PosX),
+        1,
+        "row of facades should merge into 1 quad"
+    );
+}
+
+#[test]
+fn different_face_facades_do_not_merge() {
+    // A PosX facade next to a NegY facade should not merge (different face lists).
+    let q = mesh_with(&[(0, 0, 0, TestBlock::Ladder), (0, 0, 1, TestBlock::Rail)]);
+    assert_eq!(face_count(&q, Face::PosX), 1);
+    assert_eq!(face_count(&q, Face::NegY), 1);
+    assert_eq!(q.total(), 2);
+}
+
+#[test]
+fn facade_voxel_position_is_correct() {
+    let q = mesh_single(TestBlock::Ladder);
+    let quad = &q.faces[Face::PosX.index()][0];
+    let vp = quad.voxel_position(Face::PosX);
+    assert_eq!(vp, glam::UVec3::ZERO);
+
+    let q = mesh_single(TestBlock::Rail);
+    let quad = &q.faces[Face::NegY.index()][0];
+    let vp = quad.voxel_position(Face::NegY);
+    assert_eq!(vp, glam::UVec3::ZERO);
+}
+
+#[test]
+fn facade_texture_coordinates_span_one() {
+    let q = block_faces(&TestBlock::Ladder);
+    let quad = &q.faces[Face::PosX.index()][0];
+    let uvs = quad.texture_coordinates(Face::PosX, Axis::X, false);
+
+    let u_min = uvs.iter().map(|uv| uv.x).fold(f32::INFINITY, f32::min);
+    let u_max = uvs.iter().map(|uv| uv.x).fold(f32::NEG_INFINITY, f32::max);
+    let v_min = uvs.iter().map(|uv| uv.y).fold(f32::INFINITY, f32::min);
+    let v_max = uvs.iter().map(|uv| uv.y).fold(f32::NEG_INFINITY, f32::max);
+
+    assert!((u_min).abs() < 1e-6, "u_min should be 0");
+    assert!((u_max - 1.0).abs() < 1e-6, "u_max should be 1");
+    assert!((v_min).abs() < 1e-6, "v_min should be 0");
+    assert!((v_max - 1.0).abs() < 1e-6, "v_max should be 1");
+}

@@ -88,7 +88,7 @@ fn single_block_indices_match_block_mesh() {
             .map(|p| Vec3::new(p[0] - 1.0, p[1] - 1.0, p[2] - 1.0));
 
         // voxmesh positions.
-        let vm_positions = vm_quad.positions(face);
+        let vm_positions = vm_quad.positions(face, 0);
 
         // Build a mapping: for each block-mesh vertex index, find the
         // matching voxmesh vertex index (by position).
@@ -197,7 +197,7 @@ fn single_block_tex_coords_match_block_mesh() {
         let bm_uvs: [[f32; 2]; 4] = oriented_face.tex_coords(config.u_flip_face, flip_v, bm_quad);
 
         // voxmesh positions and UVs.
-        let vm_positions = vm_quad.positions(face);
+        let vm_positions = vm_quad.positions(face, 0);
         let vm_uvs = vm_quad.texture_coordinates(face, Axis::X, flip_v);
 
         // Match vertices by position, then compare UVs.
