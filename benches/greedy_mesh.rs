@@ -152,7 +152,7 @@ fn bm_chunk_shell() -> [BmVoxel; BmPaddedShape::SIZE as usize] {
 }
 
 // ---------------------------------------------------------------------------
-// block-mesh runner (reuses buffer across iterations)
+// block-mesh runners (reuse buffer across iterations)
 // ---------------------------------------------------------------------------
 
 fn bench_block_mesh(b: &mut Bencher, voxels: &[BmVoxel; BmPaddedShape::SIZE as usize]) {
@@ -172,42 +172,106 @@ fn bench_block_mesh(b: &mut Bencher, voxels: &[BmVoxel; BmPaddedShape::SIZE as u
     });
 }
 
+fn bench_block_mesh_vertices(b: &mut Bencher, voxels: &[BmVoxel; BmPaddedShape::SIZE as usize]) {
+    let config = &RIGHT_HANDED_Y_UP_CONFIG;
+    let faces = &config.faces;
+    let mut buffer = GreedyQuadsBuffer::new(voxels.len());
+    b.iter(|| {
+        buffer.reset(voxels.len());
+        greedy_quads(
+            voxels,
+            &BmPaddedShape {},
+            [0; 3],
+            [17; 3],
+            faces,
+            &mut buffer,
+        );
+        for (face_idx, face_quads) in buffer.quads.groups.iter().enumerate() {
+            let oriented_face = &faces[face_idx];
+            let flip_v = face_idx >= 4; // PosZ, NegZ
+            for quad in face_quads {
+                let positions = oriented_face.quad_mesh_positions(quad, 1.0);
+                let uvs = oriented_face.tex_coords(config.u_flip_face, flip_v, quad);
+                test::black_box(&positions);
+                test::black_box(&uvs);
+            }
+        }
+    });
+}
+
 // ---------------------------------------------------------------------------
-// voxmesh benches
+// voxmesh runners
+// ---------------------------------------------------------------------------
+
+fn bench_voxmesh(b: &mut Bencher, chunk: &PaddedChunk<VmBlock>) {
+    let mut quads = Quads::new();
+    b.iter(|| {
+        greedy_mesh_into(test::black_box(chunk), &mut quads);
+        test::black_box(&quads);
+    });
+}
+
+fn bench_voxmesh_vertices(b: &mut Bencher, chunk: &PaddedChunk<VmBlock>) {
+    let mut quads = Quads::new();
+    b.iter(|| {
+        greedy_mesh_into(test::black_box(chunk), &mut quads);
+        for qf in QuadFace::ALL {
+            for quad in quads.get(qf) {
+                let positions = quad.positions(qf, Shape::WholeBlock);
+                let uvs = quad.texture_coordinates(qf, Axis::X, false);
+                test::black_box(&positions);
+                test::black_box(&uvs);
+            }
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// voxmesh benches — mesh only
 // ---------------------------------------------------------------------------
 
 #[bench]
 fn voxmesh_solid(b: &mut Bencher) {
     let chunk = vm_chunk_solid();
-    let mut quads = Quads::new();
-    b.iter(|| {
-        greedy_mesh_into(test::black_box(&chunk), &mut quads);
-        test::black_box(&quads);
-    });
+    bench_voxmesh(b, &chunk);
 }
 
 #[bench]
 fn voxmesh_checkerboard(b: &mut Bencher) {
     let chunk = vm_chunk_checkerboard();
-    let mut quads = Quads::new();
-    b.iter(|| {
-        greedy_mesh_into(test::black_box(&chunk), &mut quads);
-        test::black_box(&quads);
-    });
+    bench_voxmesh(b, &chunk);
 }
 
 #[bench]
 fn voxmesh_shell(b: &mut Bencher) {
     let chunk = vm_chunk_shell();
-    let mut quads = Quads::new();
-    b.iter(|| {
-        greedy_mesh_into(test::black_box(&chunk), &mut quads);
-        test::black_box(&quads);
-    });
+    bench_voxmesh(b, &chunk);
 }
 
 // ---------------------------------------------------------------------------
-// block-mesh benches
+// voxmesh benches — mesh + vertices
+// ---------------------------------------------------------------------------
+
+#[bench]
+fn voxmesh_solid_vertices(b: &mut Bencher) {
+    let chunk = vm_chunk_solid();
+    bench_voxmesh_vertices(b, &chunk);
+}
+
+#[bench]
+fn voxmesh_checkerboard_vertices(b: &mut Bencher) {
+    let chunk = vm_chunk_checkerboard();
+    bench_voxmesh_vertices(b, &chunk);
+}
+
+#[bench]
+fn voxmesh_shell_vertices(b: &mut Bencher) {
+    let chunk = vm_chunk_shell();
+    bench_voxmesh_vertices(b, &chunk);
+}
+
+// ---------------------------------------------------------------------------
+// block-mesh benches — mesh only
 // ---------------------------------------------------------------------------
 
 #[bench]
@@ -226,4 +290,26 @@ fn block_mesh_checkerboard(b: &mut Bencher) {
 fn block_mesh_shell(b: &mut Bencher) {
     let voxels = bm_chunk_shell();
     bench_block_mesh(b, &voxels);
+}
+
+// ---------------------------------------------------------------------------
+// block-mesh benches — mesh + vertices
+// ---------------------------------------------------------------------------
+
+#[bench]
+fn block_mesh_solid_vertices(b: &mut Bencher) {
+    let voxels = bm_chunk_solid();
+    bench_block_mesh_vertices(b, &voxels);
+}
+
+#[bench]
+fn block_mesh_checkerboard_vertices(b: &mut Bencher) {
+    let voxels = bm_chunk_checkerboard();
+    bench_block_mesh_vertices(b, &voxels);
+}
+
+#[bench]
+fn block_mesh_shell_vertices(b: &mut Bencher) {
+    let voxels = bm_chunk_shell();
+    bench_block_mesh_vertices(b, &voxels);
 }
