@@ -94,7 +94,7 @@ pub fn face_count(q: &Quads, face: Face) -> usize {
 
 /// Get vertex positions of the first quad on a given face.
 pub fn first_face_positions(q: &Quads, face: Face) -> [glam::Vec3; 4] {
-    q.faces[face.index()][0].positions(face, 0, Face::NegY)
+    q.faces[face.index()][0].positions(face, Shape::WholeBlock)
 }
 
 /// Assert all vertices of the first quad on `face` have `axis_val` on the

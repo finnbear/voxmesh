@@ -429,11 +429,7 @@ fn quads_to_vertices(quads: &Quads, chunk: &PaddedChunk<MyBlock>) -> Vec<Vertex>
             let n = qf.normal();
             let normal = Vec3::new(n.x, n.y, n.z);
 
-            let (stretch, root_face) = match block.shape() {
-                Shape::Cross(info) => (info.stretch, info.face),
-                _ => (0, Face::NegY),
-            };
-            let positions = quad.positions(qf, stretch, root_face);
+            let positions = quad.positions(qf, block.shape());
             let uvs = quad.texture_coordinates(qf, Axis::X, false);
 
             // Two triangles per quad: (0,1,2) and (0,2,3).

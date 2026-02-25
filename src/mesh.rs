@@ -1,6 +1,6 @@
 use glam::{UVec2, UVec3, Vec2, Vec3};
 
-use crate::block::{Block, CrossStretch, CullMode, Shape, FULL_THICKNESS};
+use crate::block::{Block, CrossInfo, CullMode, Shape, FULL_THICKNESS};
 use crate::chunk::{PaddedChunk, CHUNK_SIZE, PADDED, PADDING};
 use crate::face::{Axis, DiagonalFace, Face, QuadFace};
 
@@ -60,20 +60,10 @@ impl Quad {
     /// Returns the 4 vertex positions for this quad in CCW winding order
     /// (viewed from outside).
     ///
-    /// `stretch` is the horizontal stretch in 1/16ths for diagonal
-    /// ([`Shape::Cross`]) faces — 0 for sugar cane (corners on the block
-    /// diagonal), positive to push edges toward the block corners (cobwebs).
-    /// Both `stretch` and `root_face` are ignored for axis-aligned faces.
-    ///
-    /// `root_face` determines the orientation of diagonal quads: its axis
-    /// is the merge/height axis, and the two perpendicular axes form the
-    /// crossing plane.
-    pub fn positions(
-        &self,
-        face: impl Into<QuadFace>,
-        stretch: CrossStretch,
-        root_face: Face,
-    ) -> [Vec3; 4] {
+    /// For diagonal ([`Shape::Cross`]) faces, the shape's [`CrossInfo`]
+    /// determines the stretch and orientation. For axis-aligned faces the
+    /// shape is ignored.
+    pub fn positions(&self, face: impl Into<QuadFace>, shape: Shape) -> [Vec3; 4] {
         match face.into() {
             QuadFace::Aligned(face) => {
                 let scale = 1.0 / FULL_THICKNESS as f32;
@@ -99,13 +89,20 @@ impl Quad {
                 }
             }
             QuadFace::Diagonal(diag) => {
+                let info = match shape {
+                    Shape::Cross(info) => info,
+                    _ => CrossInfo {
+                        face: Face::NegY,
+                        stretch: 0,
+                    },
+                };
                 let scale = 1.0 / FULL_THICKNESS as f32;
                 let pad = PADDING as f32;
 
                 // The root face's axis is the merge/height axis.
                 // The two perpendicular axes form the crossing plane.
-                let merge_axis = root_face.axis().index();
-                let (cross_a, cross_b) = cross_axes(root_face.axis());
+                let merge_axis = info.face.axis().index();
+                let (cross_a, cross_b) = cross_axes(info.face.axis());
 
                 let origin = Vec3::new(
                     self.origin_padded.x as f32 * scale - pad,
@@ -119,7 +116,7 @@ impl Quad {
                 let ca = origin[cross_a] + 0.5;
                 let cb = origin[cross_b] + 0.5;
 
-                let half_diag = 0.5 + stretch as f32 * scale;
+                let half_diag = 0.5 + info.stretch as f32 * scale;
 
                 // DiagonalFace direction is in the XZ plane (components .x and .z).
                 // Map those two components onto our crossing axes.

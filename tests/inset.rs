@@ -69,7 +69,7 @@ fn opaque_neighbor_culls_inset_top_bottom() {
 
     // Cactus PosY should be culled (stone covers it).
     let cactus_pos_y = q.faces[Face::PosY.index()].iter().any(|quad| {
-        let verts = quad.positions(Face::PosY, 0, Face::NegY);
+        let verts = quad.positions(Face::PosY, TestBlock::Cactus.shape());
         (verts[0].y - 1.0).abs() < 1e-6
     });
     assert!(!cactus_pos_y, "cactus PosY should be culled by stone above");
@@ -81,7 +81,7 @@ fn opaque_neighbor_does_not_cull_inset_side() {
     let q = mesh_with(&[(0, 0, 0, TestBlock::Cactus), (1, 0, 0, TestBlock::Stone)]);
 
     let has_inset_pos_x = q.faces[Face::PosX.index()].iter().any(|quad| {
-        let verts = quad.positions(Face::PosX, 0, Face::NegY);
+        let verts = quad.positions(Face::PosX, TestBlock::Cactus.shape());
         (verts[0].x - 15.0 / 16.0).abs() < 1e-6
     });
     assert!(
@@ -96,7 +96,7 @@ fn inset_does_not_cull_neighbor_side() {
     let q = mesh_with(&[(0, 0, 0, TestBlock::Cactus), (1, 0, 0, TestBlock::Stone)]);
 
     let stone_neg_x = q.faces[Face::NegX.index()].iter().any(|quad| {
-        let verts = quad.positions(Face::NegX, 0, Face::NegY);
+        let verts = quad.positions(Face::NegX, TestBlock::Cactus.shape());
         (verts[0].x - 1.0).abs() < 1e-6
     });
     assert!(
@@ -112,7 +112,7 @@ fn inset_culls_neighbor_top_bottom() {
 
     // Stone's PosY (at y=1) should be culled by the cactus NegY above it.
     let stone_pos_y = q.faces[Face::PosY.index()].iter().any(|quad| {
-        let verts = quad.positions(Face::PosY, 0, Face::NegY);
+        let verts = quad.positions(Face::PosY, TestBlock::Cactus.shape());
         (verts[0].y - 1.0).abs() < 1e-6
     });
     assert!(!stone_pos_y, "stone PosY should be culled by cactus above");
