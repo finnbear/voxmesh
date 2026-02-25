@@ -1,5 +1,7 @@
 use glam::{IVec3, Vec3};
 
+use crate::block::{CrossInfo, Shape};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Axis {
@@ -70,6 +72,16 @@ impl Face {
         }
     }
 
+    /// Whether the tangent cross product `u×v` (from [`face_tangents`]) aligns
+    /// with the outward normal. When `true` the natural vertex order
+    /// `[base, base+du, base+du+dv, base+dv]` is already CCW; when `false`
+    /// the offsets must be swapped.
+    #[inline]
+    pub fn tangent_cross_positive(self) -> bool {
+        // u×v·normal > 0 for NegX, PosY, PosZ; < 0 for PosX, NegY, NegZ.
+        self.is_positive() != (self.axis() == Axis::X)
+    }
+
     pub const ALL: [Face; 6] = [
         Face::PosX,
         Face::NegX,
@@ -110,17 +122,39 @@ impl QuadFace {
     /// Returns the normalized outward normal for this face.
     ///
     /// For axis-aligned faces this is the unit axis vector. For diagonal
-    /// faces the normal is perpendicular to both the diagonal direction and
-    /// the Y axis (the sign is arbitrary since diagonal quads are two-sided).
+    /// faces the normal depends on the root face axis (which determines the
+    /// crossing plane). The sign is arbitrary since diagonal quads are
+    /// two-sided.
+    ///
+    /// `shape` is only used for diagonal faces; for aligned faces it is
+    /// ignored.
     #[inline]
-    pub fn normal(self) -> Vec3 {
+    pub fn normal(self, shape: Shape) -> Vec3 {
         match self {
             QuadFace::Aligned(f) => f.normal().as_vec3(),
             QuadFace::Diagonal(d) => {
-                let dir = d.direction(); // (±1, 0, ±1)
-                                         // cross(dir, Y) gives a horizontal vector perpendicular to the diagonal.
-                let n = dir.cross(Vec3::Y);
-                n.normalize()
+                let info = match shape {
+                    Shape::Cross(info) => info,
+                    _ => CrossInfo {
+                        face: Face::NegY,
+                        stretch: 0,
+                    },
+                };
+                let dir = d.direction(); // (±s, 0, ±s) already normalized
+                let (cross_a, cross_b) = match info.face.axis() {
+                    Axis::X => (1, 2), // crossing in YZ
+                    Axis::Y => (0, 2), // crossing in XZ
+                    Axis::Z => (0, 1), // crossing in XY
+                };
+                let merge_axis = info.face.axis().index();
+                // The normal is perpendicular to the diagonal in the crossing
+                // plane — a 90° rotation of (dir.x, dir.z) mapped onto the
+                // crossing axes. Already unit-length since dir is normalized.
+                let mut n = [0.0f32; 3];
+                n[cross_a] = -dir.z;
+                n[cross_b] = dir.x;
+                n[merge_axis] = 0.0;
+                Vec3::from_array(n)
             }
         }
     }

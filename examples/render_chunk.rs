@@ -288,7 +288,7 @@ impl<'r, 'a: 'r> Pipeline<'r> for ChunkPipeline<'a> {
     }
 
     fn blend(&self, old: Self::Pixel, new: Self::Fragment) -> Self::Pixel {
-        let alpha = (new.a / 255.0).clamp(0.0, 1.0);
+        let alpha = (new.a * (1.0 / 255.0)).clamp(0.0, 1.0);
         if alpha < 0.01 {
             return old;
         }
@@ -426,7 +426,7 @@ fn quads_to_vertices(quads: &Quads, chunk: &PaddedChunk<MyBlock>) -> Vec<Vertex>
             let vp = quad.voxel_position(qf);
             let block = *chunk.get_padded(vp + glam::UVec3::splat(PADDING as u32));
 
-            let n = qf.normal();
+            let n = qf.normal(block.shape());
             let normal = Vec3::new(n.x, n.y, n.z);
 
             let positions = quad.positions(qf, block.shape());

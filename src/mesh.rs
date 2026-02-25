@@ -81,8 +81,7 @@ impl Quad {
                 // Emit CCW winding when viewed from outside. The vertex order
                 // [base, base+du, base+du+dv, base+dv] is CCW when u×v aligns with
                 // the outward normal. When u×v opposes it, swap du/dv offsets.
-                let cross_sign = u_dir.cross(v_dir).dot(face.normal().as_vec3());
-                if cross_sign > 0.0 {
+                if face.tangent_cross_positive() {
                     [base, base + du, base + du + dv, base + dv]
                 } else {
                     [base, base + dv, base + dv + du, base + du]
@@ -164,8 +163,9 @@ impl Quad {
     ) -> [Vec2; 4] {
         match face.into() {
             QuadFace::Aligned(face) => {
-                let u_size = self.size.x as f32 / FULL_THICKNESS as f32;
-                let v_size = self.size.y as f32 / FULL_THICKNESS as f32;
+                let scale = 1.0 / FULL_THICKNESS as f32;
+                let u_size = self.size.x as f32 * scale;
+                let v_size = self.size.y as f32 * scale;
 
                 let flip_u = if face.is_positive() {
                     face.axis() == u_flip_face
@@ -173,10 +173,7 @@ impl Quad {
                     face.axis() != u_flip_face
                 };
 
-                let (u_dir, v_dir) = face_tangents(face);
-                let cross_sign = u_dir.cross(v_dir).dot(face.normal().as_vec3());
-
-                let raw = if cross_sign > 0.0 {
+                let raw = if face.tangent_cross_positive() {
                     [
                         Vec2::new(0.0, 0.0),
                         Vec2::new(u_size, 0.0),
@@ -200,7 +197,7 @@ impl Quad {
                 })
             }
             QuadFace::Diagonal(_) => {
-                let v_size = self.size.y as f32 / FULL_THICKNESS as f32;
+                let v_size = self.size.y as f32 * (1.0 / FULL_THICKNESS as f32);
                 let (v_lo, v_hi) = if flip_v { (v_size, 0.0) } else { (0.0, v_size) };
                 [
                     Vec2::new(0.0, v_lo),

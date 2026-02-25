@@ -19,6 +19,7 @@ pub fn delinearize(index: usize) -> UVec3 {
     UVec3::new(i % P, (i / P) % P, i / (P * P))
 }
 
+#[derive(Clone)]
 pub struct PaddedChunk<B: Block> {
     pub data: [B; PADDED_VOLUME],
 }
