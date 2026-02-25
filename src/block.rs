@@ -3,23 +3,22 @@ use std::fmt::Debug;
 use crate::face::Face;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CullMode {
+pub enum CullMode<T: PartialEq = ()> {
     /// Fully opaque. Neighbour faces against this block are always culled.
     Opaque,
-    /// Transparent; faces between two blocks with the same ID are culled
-    /// (e.g. glass, water).
-    TransparentMerged,
+    /// Transparent; faces between two blocks whose `T` values are equal are
+    /// culled (e.g. glass, water).
+    TransparentMerged(T),
     /// Transparent; faces are always drawn even between identical blocks
     /// (e.g. leaves).
     TransparentUnmerged,
     /// Invisible and non-renderable (e.g. air). Never produces geometry.
-    /// Behaves like [`TransparentMerged`] for culling.
     Empty,
 }
 
-impl CullMode {
+impl<T: PartialEq> CullMode<T> {
     #[inline]
-    pub fn is_renderable(self) -> bool {
+    pub fn is_renderable(&self) -> bool {
         !matches!(self, CullMode::Empty)
     }
 }
@@ -68,6 +67,12 @@ pub enum Shape {
 }
 
 pub trait Block: Copy + PartialEq + Debug {
+    /// The type used to determine whether two transparent blocks should have
+    /// their shared face culled. Two `TransparentMerged` (or `Empty`) blocks
+    /// cull their shared face when their `TransparentGroup` values are equal.
+    /// This does **not** replace `Self: PartialEq` for greedy meshing.
+    type TransparentGroup: Copy + PartialEq + Debug;
+
     fn shape(&self) -> Shape;
-    fn cull_mode(&self) -> CullMode;
+    fn cull_mode(&self) -> CullMode<Self::TransparentGroup>;
 }

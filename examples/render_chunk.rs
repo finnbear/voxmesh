@@ -45,6 +45,8 @@ enum MyBlock {
 }
 
 impl Block for MyBlock {
+    type TransparentGroup = ();
+
     fn shape(&self) -> Shape {
         match self {
             MyBlock::CobbleSlab => Shape::Slab(SlabInfo {
@@ -84,7 +86,7 @@ impl Block for MyBlock {
             MyBlock::Cobblestone | MyBlock::Clay | MyBlock::CobbleSlab | MyBlock::Debug => {
                 CullMode::Opaque
             }
-            MyBlock::Glass => CullMode::TransparentMerged,
+            MyBlock::Glass => CullMode::TransparentMerged(()),
             MyBlock::Cactus
             | MyBlock::SugarCane
             | MyBlock::Cobweb

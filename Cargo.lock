@@ -381,9 +381,9 @@ checksum = "2b8509e6791516e81c1a630d0bd7fbac36d2fa8712a9da8662e716b52d5051ca"
 
 [[package]]
 name = "glam"
-version = "0.32.0"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34627c5158214743a374170fed714833fdf4e4b0cbcc1ea98417866a4c5d4441"
+checksum = "12f597d56c1bd55a811a1be189459e8fad2bbc272616375602443bdfb37fa774"
 
 [[package]]
 name = "half"
@@ -1020,7 +1020,7 @@ version = "0.1.0"
 dependencies = [
  "block-mesh",
  "euc",
- "glam 0.32.0",
+ "glam 0.22.0",
  "image",
  "ndshape",
  "vek",

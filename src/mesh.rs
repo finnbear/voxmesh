@@ -315,10 +315,10 @@ fn is_culled_at_boundary<B: Block>(block: &B, neighbor: &B, face: Face) -> bool 
     if !neighbor_covers_face_region(block, neighbor, face) {
         return false;
     }
-    match neighbor.cull_mode() {
-        CullMode::Opaque => true,
-        CullMode::TransparentMerged | CullMode::Empty => block == neighbor,
-        CullMode::TransparentUnmerged => false,
+    match (block.cull_mode(), neighbor.cull_mode()) {
+        (_, CullMode::Opaque) => true,
+        (CullMode::TransparentMerged(a), CullMode::TransparentMerged(b)) => a == b,
+        _ => false,
     }
 }
 
@@ -869,6 +869,8 @@ mod tests {
     }
 
     impl Block for TestBlock {
+        type TransparentGroup = ();
+
         fn shape(&self) -> Shape {
             Shape::WholeBlock
         }

@@ -21,6 +21,8 @@ pub enum TestBlock {
 }
 
 impl Block for TestBlock {
+    type TransparentGroup = ();
+
     fn shape(&self) -> Shape {
         match self {
             TestBlock::UpperSlab => Shape::Slab(SlabInfo {
@@ -57,7 +59,7 @@ impl Block for TestBlock {
     fn cull_mode(&self) -> CullMode {
         match self {
             TestBlock::Air => CullMode::Empty,
-            TestBlock::Glass => CullMode::TransparentMerged,
+            TestBlock::Glass => CullMode::TransparentMerged(()),
             TestBlock::Leaves
             | TestBlock::SugarCane
             | TestBlock::Cobweb

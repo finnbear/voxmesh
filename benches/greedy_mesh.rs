@@ -21,6 +21,8 @@ enum VmBlock {
 }
 
 impl Block for VmBlock {
+    type TransparentGroup = ();
+
     fn shape(&self) -> Shape {
         Shape::WholeBlock
     }

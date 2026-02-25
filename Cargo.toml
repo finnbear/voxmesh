@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-glam = "0.32.0"
+glam = "0.22.0"
 
 [dev-dependencies]
 block-mesh = "0.2"
