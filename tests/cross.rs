@@ -91,7 +91,7 @@ fn cross_does_not_cull_adjacent_opaque_block() {
     // Stone should still have all 6 faces (cross doesn't cull it).
     // The face toward the cross block (NegX) should be present.
     let stone_neg_x = q.faces[Face::NegX.index()].iter().any(|quad| {
-        let verts = quad.positions(Face::NegX, 0);
+        let verts = quad.positions(Face::NegX, 0, Face::NegY);
         (verts[0].x - 1.0).abs() < 1e-6
     });
     assert!(stone_neg_x, "stone NegX face should be present");
@@ -103,7 +103,7 @@ fn cross_diagonal_positions_span_unit_block() {
 
     for diag in DiagonalFace::ALL {
         let quad = &q.diagonals[diag.index()][0];
-        let verts = quad.positions(diag, 0);
+        let verts = quad.positions(diag, 0, Face::NegY);
 
         // Y should span [0, 1].
         let y_min = verts.iter().map(|v| v.y).fold(f32::INFINITY, f32::min);
@@ -152,7 +152,7 @@ fn merged_cross_diagonal_height_spans_multiple_blocks() {
 
     for diag in DiagonalFace::ALL {
         let quad = &q.diagonals[diag.index()][0];
-        let verts = quad.positions(diag, 0);
+        let verts = quad.positions(diag, 0, Face::NegY);
 
         let y_min = verts.iter().map(|v| v.y).fold(f32::INFINITY, f32::min);
         let y_max = verts.iter().map(|v| v.y).fold(f32::NEG_INFINITY, f32::max);
@@ -176,7 +176,7 @@ fn stretched_cross_extends_beyond_block_boundary() {
     // Cobweb has stretch=4 (4/16 = 0.25 extra on each side).
     for diag in DiagonalFace::ALL {
         let quad = &q.diagonals[diag.index()][0];
-        let verts = quad.positions(diag, 4);
+        let verts = quad.positions(diag, 4, Face::NegY);
 
         // The diagonal extent should be wider than 1 block.
         let x_min = verts.iter().map(|v| v.x).fold(f32::INFINITY, f32::min);
@@ -237,4 +237,115 @@ fn merged_cross_texture_coordinates_scale_vertically() {
         assert_eq!(uvs[2], glam::Vec2::new(1.0, 3.0));
         assert_eq!(uvs[3], glam::Vec2::new(0.0, 3.0));
     }
+}
+
+// ---- Root face tests ----
+
+#[test]
+fn cross_posy_root_crosses_in_xz_plane() {
+    // PosY root: same crossing plane as NegY (XZ), merge along Y.
+    let q = block_faces(&TestBlock::Chain);
+    assert_eq!(q.total(), 2);
+
+    for diag in DiagonalFace::ALL {
+        let quad = &q.diagonals[diag.index()][0];
+        let verts = quad.positions(diag, 0, Face::PosY);
+
+        // Y (merge axis) should span [0, 1].
+        let y_min = verts.iter().map(|v| v.y).fold(f32::INFINITY, f32::min);
+        let y_max = verts.iter().map(|v| v.y).fold(f32::NEG_INFINITY, f32::max);
+        assert!((y_min).abs() < 1e-6, "y_min should be 0, got {y_min}");
+        assert!((y_max - 1.0).abs() < 1e-6, "y_max should be 1, got {y_max}");
+
+        // All vertices within the unit cube.
+        for v in &verts {
+            assert!(v.x >= -1e-6 && v.x <= 1.0 + 1e-6);
+            assert!(v.z >= -1e-6 && v.z <= 1.0 + 1e-6);
+        }
+    }
+}
+
+#[test]
+fn cross_posx_root_crosses_in_yz_plane() {
+    // PosX root: crossing in YZ, merge along X.
+    let q = block_faces(&TestBlock::Vine);
+    assert_eq!(q.total(), 2);
+
+    for diag in DiagonalFace::ALL {
+        let quad = &q.diagonals[diag.index()][0];
+        let verts = quad.positions(diag, 0, Face::PosX);
+
+        // X (merge axis) should span [0, 1].
+        let x_min = verts.iter().map(|v| v.x).fold(f32::INFINITY, f32::min);
+        let x_max = verts.iter().map(|v| v.x).fold(f32::NEG_INFINITY, f32::max);
+        assert!((x_min).abs() < 1e-6, "x_min should be 0, got {x_min}");
+        assert!((x_max - 1.0).abs() < 1e-6, "x_max should be 1, got {x_max}");
+
+        // Crossing axes (Y, Z) should be centered around 0.5.
+        for v in &verts {
+            assert!(v.y >= -1e-6 && v.y <= 1.0 + 1e-6);
+            assert!(v.z >= -1e-6 && v.z <= 1.0 + 1e-6);
+        }
+    }
+}
+
+#[test]
+fn cross_posx_root_merges_along_x() {
+    // Three vine blocks in a row along X should merge.
+    let q = mesh_with(&[
+        (0, 0, 0, TestBlock::Vine),
+        (1, 0, 0, TestBlock::Vine),
+        (2, 0, 0, TestBlock::Vine),
+    ]);
+    for diag in DiagonalFace::ALL {
+        assert_eq!(
+            q.diagonals[diag.index()].len(),
+            1,
+            "diagonal {:?} should merge into 1 quad",
+            diag
+        );
+    }
+    assert_eq!(q.total(), 2);
+
+    // Merged quad should span 3 blocks along X.
+    let quad = &q.diagonals[DiagonalFace::A.index()][0];
+    let verts = quad.positions(DiagonalFace::A, 0, Face::PosX);
+    let x_min = verts.iter().map(|v| v.x).fold(f32::INFINITY, f32::min);
+    let x_max = verts.iter().map(|v| v.x).fold(f32::NEG_INFINITY, f32::max);
+    assert!((x_min).abs() < 1e-6, "x_min should be 0, got {x_min}");
+    assert!(
+        (x_max - 3.0).abs() < 1e-6,
+        "x_max should be 3.0, got {x_max}"
+    );
+}
+
+#[test]
+fn cross_posx_root_does_not_merge_along_y() {
+    // Vine blocks stacked along Y should NOT merge (Y is a crossing axis, not merge axis).
+    let q = mesh_with(&[(0, 0, 0, TestBlock::Vine), (0, 1, 0, TestBlock::Vine)]);
+    for diag in DiagonalFace::ALL {
+        assert_eq!(
+            q.diagonals[diag.index()].len(),
+            2,
+            "diagonal {:?} should have 2 quads (no merge along non-merge axis)",
+            diag
+        );
+    }
+    assert_eq!(q.total(), 4);
+}
+
+#[test]
+fn different_root_face_crosses_do_not_merge() {
+    // SugarCane (NegY root) and Chain (PosY root) stacked should not merge
+    // (they are different blocks).
+    let q = mesh_with(&[(0, 0, 0, TestBlock::SugarCane), (0, 1, 0, TestBlock::Chain)]);
+    for diag in DiagonalFace::ALL {
+        assert_eq!(
+            q.diagonals[diag.index()].len(),
+            2,
+            "diagonal {:?} should have 2 quads",
+            diag
+        );
+    }
+    assert_eq!(q.total(), 4);
 }

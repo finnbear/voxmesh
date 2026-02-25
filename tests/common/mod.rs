@@ -11,11 +11,13 @@ pub enum TestBlock {
     Leaves,
     UpperSlab, // PosY slab, thickness 8
     LowerSlab, // NegY slab, thickness 8
-    SugarCane, // Cross(0) — diagonal billboard, no stretch
-    Cobweb,    // Cross(4) — diagonal billboard, stretched
+    SugarCane, // Cross(NegY, 0) — diagonal billboard, no stretch
+    Cobweb,    // Cross(NegY, 4) — diagonal billboard, stretched
     Ladder,    // Facade(PosX) — flat face on +X side
     Rail,      // Facade(NegY) — flat face on bottom
     Cactus,    // Inset(1) — horizontal faces inset by 1/16
+    Chain,     // Cross(PosY, 0) — hanging cross, merges along Y
+    Vine,      // Cross(PosX, 0) — wall-mounted cross, merges along X
 }
 
 impl Block for TestBlock {
@@ -29,8 +31,22 @@ impl Block for TestBlock {
                 face: Face::NegY,
                 thickness: 8,
             }),
-            TestBlock::SugarCane => Shape::Cross(0),
-            TestBlock::Cobweb => Shape::Cross(4),
+            TestBlock::SugarCane => Shape::Cross(CrossInfo {
+                face: Face::NegY,
+                stretch: 0,
+            }),
+            TestBlock::Cobweb => Shape::Cross(CrossInfo {
+                face: Face::NegY,
+                stretch: 4,
+            }),
+            TestBlock::Chain => Shape::Cross(CrossInfo {
+                face: Face::PosY,
+                stretch: 0,
+            }),
+            TestBlock::Vine => Shape::Cross(CrossInfo {
+                face: Face::PosX,
+                stretch: 0,
+            }),
             TestBlock::Ladder => Shape::Facade(Face::PosX),
             TestBlock::Rail => Shape::Facade(Face::NegY),
             TestBlock::Cactus => Shape::Inset(1),
@@ -45,6 +61,8 @@ impl Block for TestBlock {
             TestBlock::Leaves
             | TestBlock::SugarCane
             | TestBlock::Cobweb
+            | TestBlock::Chain
+            | TestBlock::Vine
             | TestBlock::Ladder
             | TestBlock::Rail => CullMode::TransparentUnmerged,
             _ => CullMode::Opaque, // Stone, Dirt, Cactus
@@ -74,7 +92,7 @@ pub fn face_count(q: &Quads, face: Face) -> usize {
 
 /// Get vertex positions of the first quad on a given face.
 pub fn first_face_positions(q: &Quads, face: Face) -> [glam::Vec3; 4] {
-    q.faces[face.index()][0].positions(face, 0)
+    q.faces[face.index()][0].positions(face, 0, Face::NegY)
 }
 
 /// Assert all vertices of the first quad on `face` have `axis_val` on the

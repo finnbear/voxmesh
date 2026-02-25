@@ -65,7 +65,7 @@ fn slab_inset_face_never_culled() {
 
     // The slab's NegY (inset) face at y=0.5 must still be present.
     let has_inset = q.faces[Face::NegY.index()].iter().any(|quad| {
-        let verts = quad.positions(Face::NegY, 0);
+        let verts = quad.positions(Face::NegY, 0, Face::NegY);
         (verts[0].y - 0.5).abs() < 1e-6
     });
     assert!(has_inset, "slab inset NegY face should be present at y=0.5");
@@ -92,7 +92,7 @@ fn stacked_lower_slabs_side_faces_not_merged_vertically() {
 
     // Each side quad should span only half a block in Y.
     for quad in side_quads {
-        let verts = quad.positions(Face::PosX, 0);
+        let verts = quad.positions(Face::PosX, 0, Face::NegY);
         let y_min = verts.iter().map(|v| v.y).fold(f32::INFINITY, f32::min);
         let y_max = verts.iter().map(|v| v.y).fold(f32::NEG_INFINITY, f32::max);
         let height = y_max - y_min;

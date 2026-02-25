@@ -49,7 +49,7 @@ fn facade_block_faces_matches_greedy_mesh() {
 fn facade_posx_is_offset_from_face() {
     let q = block_faces(&TestBlock::Ladder);
     let quad = &q.faces[Face::PosX.index()][0];
-    let verts = quad.positions(Face::PosX, 0);
+    let verts = quad.positions(Face::PosX, 0, Face::NegY);
 
     // All vertices should have x = 15/16 (offset 1/16 inward from +X face).
     for (i, v) in verts.iter().enumerate() {
@@ -65,7 +65,7 @@ fn facade_posx_is_offset_from_face() {
 fn facade_negy_is_offset_from_face() {
     let q = block_faces(&TestBlock::Rail);
     let quad = &q.faces[Face::NegY.index()][0];
-    let verts = quad.positions(Face::NegY, 0);
+    let verts = quad.positions(Face::NegY, 0, Face::NegY);
 
     // All vertices should have y = 1/16 (offset 1/16 inward from -Y face).
     for (i, v) in verts.iter().enumerate() {
@@ -83,7 +83,7 @@ fn facade_does_not_cull_neighbor() {
     let q = mesh_with(&[(0, 0, 0, TestBlock::Ladder), (1, 0, 0, TestBlock::Stone)]);
     // Stone's NegX face (toward the facade) should still be present.
     let stone_neg_x = q.faces[Face::NegX.index()].iter().any(|quad| {
-        let verts = quad.positions(Face::NegX, 0);
+        let verts = quad.positions(Face::NegX, 0, Face::NegY);
         (verts[0].x - 1.0).abs() < 1e-6
     });
     assert!(stone_neg_x, "stone NegX face should be present");
@@ -95,7 +95,7 @@ fn opaque_neighbor_does_not_cull_facade() {
     let q = mesh_with(&[(0, 0, 0, TestBlock::Ladder), (1, 0, 0, TestBlock::Stone)]);
     // The ladder's PosX face should still be present.
     let has_ladder = q.faces[Face::PosX.index()].iter().any(|quad| {
-        let verts = quad.positions(Face::PosX, 0);
+        let verts = quad.positions(Face::PosX, 0, Face::NegY);
         (verts[0].x - 15.0 / 16.0).abs() < 1e-6
     });
     assert!(has_ladder, "ladder PosX facade should be present");

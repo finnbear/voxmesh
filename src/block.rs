@@ -42,12 +42,23 @@ pub struct SlabInfo {
 pub type CrossStretch = u32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CrossInfo {
+    /// The face the cross takes root on (e.g. NegY for a shrub on the ground).
+    /// The face's axis becomes the merge axis; the two perpendicular axes
+    /// form the crossing plane.
+    pub face: Face,
+    /// Horizontal stretch in 1/16ths. 0 = square, positive = wider.
+    pub stretch: CrossStretch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shape {
     WholeBlock,
     Slab(SlabInfo),
     /// X-shaped diagonal billboard (e.g. sugar cane, cobwebs).
-    /// Two vertical quads crossing diagonally through the block center.
-    Cross(CrossStretch),
+    /// Two quads crossing diagonally through the block center, oriented
+    /// by the root face.
+    Cross(CrossInfo),
     /// Flat zero-thickness face hugging one side of the block, offset
     /// 1/16th inward. Rendered double-sided (e.g. ladders, rails).
     Facade(Face),

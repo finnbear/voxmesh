@@ -39,6 +39,9 @@ enum MyBlock {
     Rail,      // Facade(NegY) — flat face on bottom
     Debug,     // WholeBlock with UV debug texture
     Cactus,    // Inset(1) — horizontal faces inset by 1/16
+    ChainY,    // Cross rooted on NegY — vertical chains
+    ChainX,    // Cross rooted on PosX — horizontal chains along X
+    ChainZ,    // Cross rooted on PosZ — horizontal chains along Z
 }
 
 impl Block for MyBlock {
@@ -48,11 +51,29 @@ impl Block for MyBlock {
                 face: Face::NegY,
                 thickness: 8,
             }),
-            MyBlock::SugarCane | MyBlock::Shrub => Shape::Cross(0),
-            MyBlock::Cobweb => Shape::Cross(4),
+            MyBlock::SugarCane | MyBlock::Shrub => Shape::Cross(CrossInfo {
+                face: Face::NegY,
+                stretch: 0,
+            }),
+            MyBlock::Cobweb => Shape::Cross(CrossInfo {
+                face: Face::NegY,
+                stretch: 4,
+            }),
             MyBlock::Ladder => Shape::Facade(Face::PosX),
             MyBlock::Rail => Shape::Facade(Face::NegY),
             MyBlock::Cactus => Shape::Inset(1),
+            MyBlock::ChainY => Shape::Cross(CrossInfo {
+                face: Face::NegY,
+                stretch: 0,
+            }),
+            MyBlock::ChainX => Shape::Cross(CrossInfo {
+                face: Face::PosX,
+                stretch: 0,
+            }),
+            MyBlock::ChainZ => Shape::Cross(CrossInfo {
+                face: Face::PosZ,
+                stretch: 0,
+            }),
             _ => Shape::WholeBlock,
         }
     }
@@ -63,13 +84,16 @@ impl Block for MyBlock {
             MyBlock::Cobblestone | MyBlock::Clay | MyBlock::CobbleSlab | MyBlock::Debug => {
                 CullMode::Opaque
             }
-            MyBlock::Glass
-            | MyBlock::Cactus
+            MyBlock::Glass => CullMode::TransparentMerged,
+            MyBlock::Cactus
             | MyBlock::SugarCane
             | MyBlock::Cobweb
             | MyBlock::Shrub
             | MyBlock::Ladder
-            | MyBlock::Rail => CullMode::TransparentMerged,
+            | MyBlock::Rail
+            | MyBlock::ChainY
+            | MyBlock::ChainX
+            | MyBlock::ChainZ => CullMode::TransparentUnmerged,
             MyBlock::Leaves => CullMode::TransparentUnmerged,
         }
     }
@@ -105,6 +129,7 @@ fn build_atlas() -> Buffer2d<Rgba<f32>> {
         "examples/cactus_side.png",
         "examples/cactus_top.png",
         "examples/cactus_bottom.png",
+        "examples/chain.png",
     ]
     .iter()
     .map(|p| load_tile(p))
@@ -141,6 +166,7 @@ fn atlas_u_offset(block: MyBlock, face: QuadFace) -> f32 {
             QuadFace::Aligned(Face::NegY) => 12.0,
             _ => 10.0, // side faces
         },
+        MyBlock::ChainY | MyBlock::ChainX | MyBlock::ChainZ => 13.0,
         MyBlock::Air => 0.0,
     }
 }
@@ -322,6 +348,33 @@ fn build_chunk() -> PaddedChunk<MyBlock> {
         }
     }
 
+    // Chains surrounding the building, demonstrating all 3 cross root axes.
+    // Vertical chains (Y-axis) hanging from canopy corners.
+    for &(cx, cz) in &[
+        (1, 5),
+        (1, 10),
+        (14, 5),
+        (14, 10),
+        (5, 1),
+        (10, 1),
+        (5, 14),
+        (10, 14),
+    ] {
+        for y in 2..6 {
+            chunk.set(cx, y, cz, MyBlock::ChainY);
+        }
+    }
+    // Horizontal chains along X (X-axis) on the z=1 and z=14 walls.
+    for x in 4..12 {
+        chunk.set(x, 4, 1, MyBlock::ChainX);
+        chunk.set(x, 4, 14, MyBlock::ChainX);
+    }
+    // Horizontal chains along Z (Z-axis) on the x=1 and x=14 walls.
+    for z in 4..12 {
+        chunk.set(1, 4, z, MyBlock::ChainZ);
+        chunk.set(14, 4, z, MyBlock::ChainZ);
+    }
+
     // Ladders on the +X face of clay pillars.
     for y in 1..6 {
         chunk.set(3, y, 2, MyBlock::Ladder);
@@ -376,11 +429,11 @@ fn quads_to_vertices(quads: &Quads, chunk: &PaddedChunk<MyBlock>) -> Vec<Vertex>
             let n = qf.normal();
             let normal = Vec3::new(n.x, n.y, n.z);
 
-            let stretch = match block.shape() {
-                Shape::Cross(s) => s,
-                _ => 0,
+            let (stretch, root_face) = match block.shape() {
+                Shape::Cross(info) => (info.stretch, info.face),
+                _ => (0, Face::NegY),
             };
-            let positions = quad.positions(qf, stretch);
+            let positions = quad.positions(qf, stretch, root_face);
             let uvs = quad.texture_coordinates(qf, Axis::X, false);
 
             // Two triangles per quad: (0,1,2) and (0,2,3).

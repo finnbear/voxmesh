@@ -63,8 +63,17 @@ impl Quad {
     /// `stretch` is the horizontal stretch in 1/16ths for diagonal
     /// ([`Shape::Cross`]) faces — 0 for sugar cane (corners on the block
     /// diagonal), positive to push edges toward the block corners (cobwebs).
-    /// It is ignored for axis-aligned faces.
-    pub fn positions(&self, face: impl Into<QuadFace>, stretch: CrossStretch) -> [Vec3; 4] {
+    /// Both `stretch` and `root_face` are ignored for axis-aligned faces.
+    ///
+    /// `root_face` determines the orientation of diagonal quads: its axis
+    /// is the merge/height axis, and the two perpendicular axes form the
+    /// crossing plane.
+    pub fn positions(
+        &self,
+        face: impl Into<QuadFace>,
+        stretch: CrossStretch,
+        root_face: Face,
+    ) -> [Vec3; 4] {
         match face.into() {
             QuadFace::Aligned(face) => {
                 let scale = 1.0 / FULL_THICKNESS as f32;
@@ -93,26 +102,55 @@ impl Quad {
                 let scale = 1.0 / FULL_THICKNESS as f32;
                 let pad = PADDING as f32;
 
-                let base_y = self.origin_padded.y as f32 * scale - pad;
+                // The root face's axis is the merge/height axis.
+                // The two perpendicular axes form the crossing plane.
+                let merge_axis = root_face.axis().index();
+                let (cross_a, cross_b) = cross_axes(root_face.axis());
+
+                let origin = Vec3::new(
+                    self.origin_padded.x as f32 * scale - pad,
+                    self.origin_padded.y as f32 * scale - pad,
+                    self.origin_padded.z as f32 * scale - pad,
+                );
+
+                let base_merge = origin[merge_axis];
                 let height = self.size.y as f32 * scale;
 
-                let bx = self.origin_padded.x as f32 * scale - pad;
-                let bz = self.origin_padded.z as f32 * scale - pad;
-                let cx = bx + 0.5;
-                let cz = bz + 0.5;
+                let ca = origin[cross_a] + 0.5;
+                let cb = origin[cross_b] + 0.5;
 
                 let half_diag = 0.5 + stretch as f32 * scale;
 
+                // DiagonalFace direction is in the XZ plane (components .x and .z).
+                // Map those two components onto our crossing axes.
                 let dir = diag.direction();
-                let dx = dir.x * half_diag;
-                let dz = dir.z * half_diag;
+                let da = dir.x * half_diag;
+                let db = dir.z * half_diag;
 
-                let p0 = Vec3::new(cx - dx, base_y, cz - dz);
-                let p1 = Vec3::new(cx + dx, base_y, cz + dz);
-                let p2 = Vec3::new(cx + dx, base_y + height, cz + dz);
-                let p3 = Vec3::new(cx - dx, base_y + height, cz - dz);
+                let mut p0 = [0.0f32; 3];
+                let mut p1 = [0.0f32; 3];
+                let mut p2 = [0.0f32; 3];
+                let mut p3 = [0.0f32; 3];
 
-                [p0, p1, p2, p3]
+                p0[cross_a] = ca - da;
+                p0[cross_b] = cb - db;
+                p0[merge_axis] = base_merge;
+                p1[cross_a] = ca + da;
+                p1[cross_b] = cb + db;
+                p1[merge_axis] = base_merge;
+                p2[cross_a] = ca + da;
+                p2[cross_b] = cb + db;
+                p2[merge_axis] = base_merge + height;
+                p3[cross_a] = ca - da;
+                p3[cross_b] = cb - db;
+                p3[merge_axis] = base_merge + height;
+
+                [
+                    Vec3::from_array(p0),
+                    Vec3::from_array(p1),
+                    Vec3::from_array(p2),
+                    Vec3::from_array(p3),
+                ]
             }
         }
     }
@@ -217,6 +255,17 @@ struct MaskEntry<B: Block> {
     v_intra_offset: u8,
     /// Quad extent within one block cell along v, in 1/16ths.
     v_intra_extent: u8,
+}
+
+/// Returns the two axis indices perpendicular to the given axis.
+/// Used by diagonal cross blocks to determine the crossing plane.
+#[inline]
+fn cross_axes(axis: Axis) -> (usize, usize) {
+    match axis {
+        Axis::X => (1, 2), // cross in YZ
+        Axis::Y => (0, 2), // cross in XZ
+        Axis::Z => (0, 1), // cross in XY
+    }
 }
 
 /// Returns the (normal_idx, u_idx, v_idx) axis indices for a face, matching
@@ -521,16 +570,27 @@ fn emit_quad<B: Block>(
 
 /// Emit diagonal quads for a cross-shaped block into `quads`.
 ///
-/// `x_block` and `z_block` are the block-level XZ position (including
-/// padding). `y_block` is the base Y position. `height` is the number of
-/// blocks merged vertically.
+/// `block_pos` contains the block-level position (including padding) for
+/// each axis. `root_face` determines orientation: its axis is the merge
+/// axis, and `merge_len` is the number of blocks merged along it.
 #[inline]
-fn emit_cross_quads(quads: &mut Quads, x_block: u32, y_block: u32, z_block: u32, height: u32) {
+fn emit_cross_quads(quads: &mut Quads, block_pos: [u32; 3], root_face: Face, merge_len: u32) {
     let ft32 = FULL_THICKNESS;
+    let merge_axis = root_face.axis().index();
+    let (cross_a, cross_b) = cross_axes(root_face.axis());
+
+    // origin_padded: crossing axes use block_pos directly, merge axis uses block_pos.
+    // size: x = FULL_THICKNESS (one block wide in the crossing plane),
+    //        y = merge_len * FULL_THICKNESS (merged along the merge axis).
+    let mut origin = [0u32; 3];
+    origin[cross_a] = block_pos[cross_a] * ft32;
+    origin[cross_b] = block_pos[cross_b] * ft32;
+    origin[merge_axis] = block_pos[merge_axis] * ft32;
+
     for diag in DiagonalFace::ALL {
         quads.diagonals[diag.index()].push(Quad {
-            origin_padded: UVec3::new(x_block * ft32, y_block * ft32, z_block * ft32),
-            size: UVec2::new(ft32, height * ft32),
+            origin_padded: UVec3::new(origin[0], origin[1], origin[2]),
+            size: UVec2::new(ft32, merge_len * ft32),
         });
     }
 }
@@ -556,8 +616,9 @@ pub fn block_faces_into<B: Block>(block: &B, quads: &mut Quads) {
         return;
     }
 
-    if matches!(block.shape(), Shape::Cross(_)) {
-        emit_cross_quads(quads, PADDING as u32, PADDING as u32, PADDING as u32, 1);
+    if let Shape::Cross(info) = block.shape() {
+        let p = PADDING as u32;
+        emit_cross_quads(quads, [p, p, p], info.face, 1);
         return;
     }
 
@@ -730,45 +791,66 @@ pub fn greedy_mesh_into<B: Block>(chunk: &PaddedChunk<B>, quads: &mut Quads) {
         }
     }
 
-    // Cross-block pass: scan Y columns and merge vertically.
-    let y_stride = PADDED; // index step for +1 Y
-    for z in 0..CHUNK_SIZE {
-        for x in 0..CHUNK_SIZE {
-            let col_base = crate::chunk::padded_idx(x + PADDING, PADDING, z + PADDING);
-            let mut y = 0;
-            while y < CHUNK_SIZE {
-                let idx = col_base + y * y_stride;
-                let block = unsafe { data.get_unchecked(idx) };
+    // Cross-block pass: for each merge axis, scan columns along that axis
+    // and merge consecutive identical cross blocks.
+    //
+    // Strides into the padded array: X=1, Y=PADDED, Z=PADDED*PADDED.
+    let axis_strides = [1usize, PADDED, PADDED * PADDED];
 
-                let stretch = match block.shape() {
-                    Shape::Cross(s) if block.cull_mode().is_renderable() => s,
-                    _ => {
-                        y += 1;
-                        continue;
-                    }
-                };
+    for merge_axis in 0..3usize {
+        let (plane_a, plane_b) = match merge_axis {
+            0 => (1, 2), // merge along X, iterate YZ
+            1 => (0, 2), // merge along Y, iterate XZ
+            _ => (0, 1), // merge along Z, iterate XY
+        };
+        let merge_stride = axis_strides[merge_axis];
 
-                // Merge upward while the block is identical.
-                let mut height = 1u32;
-                while y + height as usize <= CHUNK_SIZE - 1 {
-                    let above_idx = col_base + (y + height as usize) * y_stride;
-                    let above = unsafe { data.get_unchecked(above_idx) };
-                    if above != block {
-                        break;
+        for pb in 0..CHUNK_SIZE {
+            for pa in 0..CHUNK_SIZE {
+                let mut pos = [0usize; 3];
+                pos[plane_a] = pa + PADDING;
+                pos[plane_b] = pb + PADDING;
+                pos[merge_axis] = PADDING;
+                let col_base = pos[0] + pos[1] * PADDED + pos[2] * PADDED * PADDED;
+
+                let mut m = 0;
+                while m < CHUNK_SIZE {
+                    let idx = col_base + m * merge_stride;
+                    let block = unsafe { data.get_unchecked(idx) };
+
+                    let info = match block.shape() {
+                        Shape::Cross(info)
+                            if block.cull_mode().is_renderable()
+                                && info.face.axis().index() == merge_axis =>
+                        {
+                            info
+                        }
+                        _ => {
+                            m += 1;
+                            continue;
+                        }
+                    };
+
+                    // Merge along the merge axis while the block is identical.
+                    let mut merge_len = 1u32;
+                    while m + merge_len as usize <= CHUNK_SIZE - 1 {
+                        let next_idx = col_base + (m + merge_len as usize) * merge_stride;
+                        let next = unsafe { data.get_unchecked(next_idx) };
+                        if next != block {
+                            break;
+                        }
+                        merge_len += 1;
                     }
-                    height += 1;
+
+                    let mut block_pos = [0u32; 3];
+                    block_pos[plane_a] = (PADDING + pa) as u32;
+                    block_pos[plane_b] = (PADDING + pb) as u32;
+                    block_pos[merge_axis] = (PADDING + m) as u32;
+
+                    emit_cross_quads(quads, block_pos, info.face, merge_len);
+
+                    m += merge_len as usize;
                 }
-                let _ = stretch; // stretch is stored on the block, not in the quad
-
-                emit_cross_quads(
-                    quads,
-                    (PADDING + x) as u32,
-                    (PADDING + y) as u32,
-                    (PADDING + z) as u32,
-                    height,
-                );
-
-                y += height as usize;
             }
         }
     }
