@@ -10,9 +10,7 @@ use block_mesh::{
 use ndshape::{ConstShape, ConstShape3u32};
 use voxmesh::{greedy_mesh_into, *};
 
-// ---------------------------------------------------------------------------
 // voxmesh block type
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VmBlock {
@@ -34,9 +32,7 @@ impl Block for VmBlock {
     }
 }
 
-// ---------------------------------------------------------------------------
 // block-mesh voxel type
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BmVoxel {
@@ -62,11 +58,9 @@ impl MergeVoxel for BmVoxel {
 
 type BmPaddedShape = ConstShape3u32<18, 18, 18>;
 
-// ---------------------------------------------------------------------------
 // Helpers to fill chunks with the same pattern for both libraries
-// ---------------------------------------------------------------------------
 
-/// Solid 16^3 chunk — worst case for face count (only exterior faces survive).
+/// Solid 16x16x16 chunk, worst case for face count (only exterior faces survive).
 fn vm_chunk_solid() -> PaddedChunk<VmBlock> {
     let mut chunk = PaddedChunk::new_filled(VmBlock::Air);
     for x in 0..CHUNK_SIZE as u32 {
@@ -91,7 +85,7 @@ fn bm_chunk_solid() -> [BmVoxel; BmPaddedShape::SIZE as usize] {
     voxels
 }
 
-/// Checkerboard — worst case for merging (no two adjacent same-type blocks).
+/// Checkerboard pattern, worst case for merging (no two adjacent same-type blocks).
 fn vm_chunk_checkerboard() -> PaddedChunk<VmBlock> {
     let mut chunk = PaddedChunk::new_filled(VmBlock::Air);
     for x in 0..CHUNK_SIZE as u32 {
@@ -121,7 +115,7 @@ fn bm_chunk_checkerboard() -> [BmVoxel; BmPaddedShape::SIZE as usize] {
     voxels
 }
 
-/// Hollow shell — floor + walls + ceiling, interior is air.
+/// Hollow shell (floor + walls + ceiling), interior is air.
 fn vm_chunk_shell() -> PaddedChunk<VmBlock> {
     let mut chunk = PaddedChunk::new_filled(VmBlock::Air);
     for x in 0..CHUNK_SIZE as u32 {
@@ -151,9 +145,7 @@ fn bm_chunk_shell() -> [BmVoxel; BmPaddedShape::SIZE as usize] {
     voxels
 }
 
-// ---------------------------------------------------------------------------
 // block-mesh runners (reuse buffer across iterations)
-// ---------------------------------------------------------------------------
 
 fn bench_block_mesh(b: &mut Bencher, voxels: &[BmVoxel; BmPaddedShape::SIZE as usize]) {
     let faces = &RIGHT_HANDED_Y_UP_CONFIG.faces;
@@ -199,9 +191,7 @@ fn bench_block_mesh_vertices(b: &mut Bencher, voxels: &[BmVoxel; BmPaddedShape::
     });
 }
 
-// ---------------------------------------------------------------------------
 // voxmesh runners
-// ---------------------------------------------------------------------------
 
 fn bench_voxmesh(b: &mut Bencher, chunk: &PaddedChunk<VmBlock>) {
     let mut quads = Quads::new();
@@ -226,9 +216,7 @@ fn bench_voxmesh_vertices(b: &mut Bencher, chunk: &PaddedChunk<VmBlock>) {
     });
 }
 
-// ---------------------------------------------------------------------------
-// voxmesh benches — mesh only
-// ---------------------------------------------------------------------------
+// voxmesh benches - mesh only
 
 #[bench]
 fn voxmesh_solid(b: &mut Bencher) {
@@ -248,9 +236,7 @@ fn voxmesh_shell(b: &mut Bencher) {
     bench_voxmesh(b, &chunk);
 }
 
-// ---------------------------------------------------------------------------
-// voxmesh benches — mesh + vertices
-// ---------------------------------------------------------------------------
+// voxmesh benches - mesh + vertices
 
 #[bench]
 fn voxmesh_solid_vertices(b: &mut Bencher) {
@@ -270,9 +256,7 @@ fn voxmesh_shell_vertices(b: &mut Bencher) {
     bench_voxmesh_vertices(b, &chunk);
 }
 
-// ---------------------------------------------------------------------------
-// block-mesh benches — mesh only
-// ---------------------------------------------------------------------------
+// block-mesh benches - mesh only
 
 #[bench]
 fn block_mesh_solid(b: &mut Bencher) {
@@ -292,9 +276,7 @@ fn block_mesh_shell(b: &mut Bencher) {
     bench_block_mesh(b, &voxels);
 }
 
-// ---------------------------------------------------------------------------
-// block-mesh benches — mesh + vertices
-// ---------------------------------------------------------------------------
+// block-mesh benches - mesh + vertices
 
 #[bench]
 fn block_mesh_solid_vertices(b: &mut Bencher) {

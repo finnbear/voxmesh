@@ -72,13 +72,13 @@ impl Face {
         }
     }
 
-    /// Whether the tangent cross product `u×v` (from [`face_tangents`]) aligns
-    /// with the outward normal. When `true` the natural vertex order
-    /// `[base, base+du, base+du+dv, base+dv]` is already CCW; when `false`
+    /// Whether the tangent cross product `u x v` (from [`face_tangents`])
+    /// aligns with the outward normal. When true, the vertex order
+    /// `[base, base+du, base+du+dv, base+dv]` is already CCW. When false,
     /// the offsets must be swapped.
     #[inline]
     pub fn tangent_cross_positive(self) -> bool {
-        // u×v·normal > 0 for NegX, PosY, PosZ; < 0 for PosX, NegY, NegZ.
+        // (u x v) . normal > 0 for NegX, PosY, PosZ; < 0 for PosX, NegY, NegZ.
         self.is_positive() != (self.axis() == Axis::X)
     }
 
@@ -92,7 +92,7 @@ impl Face {
     ];
 }
 
-/// Any face that a quad can belong to: either an axis-aligned [`Face`] or a
+/// A face that a quad can belong to: either an axis-aligned [`Face`] or a
 /// [`DiagonalFace`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuadFace {
@@ -112,22 +112,20 @@ impl QuadFace {
         QuadFace::Diagonal(DiagonalFace::B),
     ];
 
-    /// Whether this face requires two-sided (backface-culling-disabled)
-    /// rendering.
+    /// Whether this face requires two-sided rendering (no backface culling).
     #[inline]
     pub fn is_diagonal(self) -> bool {
         matches!(self, QuadFace::Diagonal(_))
     }
 
-    /// Returns the normalized outward normal for this face.
+    /// Returns the unit outward normal for this face.
     ///
-    /// For axis-aligned faces this is the unit axis vector. For diagonal
-    /// faces the normal depends on the root face axis (which determines the
-    /// crossing plane). The sign is arbitrary since diagonal quads are
+    /// For axis-aligned faces, returns the unit axis vector. For diagonal
+    /// faces, the normal depends on the root face axis (which determines
+    /// the crossing plane). The sign is arbitrary since diagonal quads are
     /// two-sided.
     ///
-    /// `shape` is only used for diagonal faces; for aligned faces it is
-    /// ignored.
+    /// `shape` is only used for diagonal faces and ignored otherwise.
     #[inline]
     pub fn normal(self, shape: Shape) -> Vec3 {
         match self {
@@ -140,16 +138,15 @@ impl QuadFace {
                         stretch: 0,
                     },
                 };
-                let dir = d.direction(); // (±s, 0, ±s) already normalized
+                let dir = d.direction();
                 let (cross_a, cross_b) = match info.face.axis() {
-                    Axis::X => (1, 2), // crossing in YZ
-                    Axis::Y => (0, 2), // crossing in XZ
-                    Axis::Z => (0, 1), // crossing in XY
+                    Axis::X => (1, 2),
+                    Axis::Y => (0, 2),
+                    Axis::Z => (0, 1),
                 };
                 let merge_axis = info.face.axis().index();
-                // The normal is perpendicular to the diagonal in the crossing
-                // plane — a 90° rotation of (dir.x, dir.z) mapped onto the
-                // crossing axes. Already unit-length since dir is normalized.
+                // 90-degree rotation of the diagonal direction in the crossing
+                // plane. Already unit-length since `dir` is normalized.
                 let mut n = [0.0f32; 3];
                 n[cross_a] = -dir.z;
                 n[cross_b] = dir.x;
@@ -177,8 +174,8 @@ impl From<DiagonalFace> for QuadFace {
 /// One of the two diagonal planes in an X-shaped billboard.
 ///
 /// Viewed from above (looking down -Y), the two planes form an X:
-/// - `A`: runs from the (minX, minZ) corner to (maxX, maxZ) — the `+X +Z` diagonal.
-/// - `B`: runs from the (maxX, minZ) corner to (minX, maxZ) — the `-X +Z` diagonal.
+/// - `A`: runs from (minX, minZ) to (maxX, maxZ), the +X +Z diagonal.
+/// - `B`: runs from (maxX, minZ) to (minX, maxZ), the -X +Z diagonal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum DiagonalFace {
@@ -194,8 +191,8 @@ impl DiagonalFace {
         self as u8 as usize
     }
 
-    /// Returns the normalized horizontal direction vector for this diagonal
-    /// (in the XZ plane).
+    /// Returns the unit horizontal direction vector for this diagonal
+    /// in the XZ plane.
     #[inline]
     pub fn direction(self) -> Vec3 {
         let s = std::f32::consts::FRAC_1_SQRT_2;

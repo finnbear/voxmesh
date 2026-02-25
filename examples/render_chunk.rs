@@ -1,13 +1,6 @@
 //! Software-renders a greedy-meshed voxel chunk using `euc` and writes the
 //! result to `examples/render_chunk.png`.
 //!
-//! The chunk contains five block types arranged in a small scene:
-//! - Cobblestone floor
-//! - Cobblestone half-slabs (paths/steps)
-//! - Clay pillars
-//! - Glass windows
-//! - Leaves canopy
-//!
 //! Run with:
 //!   cargo run --example render_chunk
 
@@ -20,9 +13,7 @@ use euc::{
 use vek::{Mat4, Rgba, Vec2, Vec3, Vec4};
 use voxmesh::*;
 
-// ---------------------------------------------------------------------------
 // Block definition
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MyBlock {
@@ -32,16 +23,16 @@ enum MyBlock {
     Clay,
     Glass,
     Leaves,
-    SugarCane, // Cross(0) — diagonal billboard
-    Cobweb,    // Cross(4) — stretched diagonal billboard
-    Shrub,     // Cross(0) — short diagonal billboard
-    Ladder,    // Facade(PosX) — flat face on +X side
-    Rail,      // Facade(NegY) — flat face on bottom
+    SugarCane, // Cross(0), diagonal billboard
+    Cobweb,    // Cross(4), stretched diagonal billboard
+    Shrub,     // Cross(0), short diagonal billboard
+    Ladder,    // Facade(PosX), flat face on +X side
+    Rail,      // Facade(NegY), flat face on bottom
     Debug,     // WholeBlock with UV debug texture
-    Cactus,    // Inset(1) — horizontal faces inset by 1/16
-    ChainY,    // Cross rooted on NegY — vertical chains
-    ChainX,    // Cross rooted on PosX — horizontal chains along X
-    ChainZ,    // Cross rooted on PosZ — horizontal chains along Z
+    Cactus,    // Inset(1), horizontal faces inset by 1/16
+    ChainY,    // Cross rooted on NegY, vertical chains
+    ChainX,    // Cross rooted on PosX, horizontal chains along X
+    ChainZ,    // Cross rooted on PosZ, horizontal chains along Z
 }
 
 impl Block for MyBlock {
@@ -101,9 +92,7 @@ impl Block for MyBlock {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Texture atlas — pack four 16×16 tiles into a 64×16 strip
-// ---------------------------------------------------------------------------
+// Texture atlas
 
 fn load_tile(path: &str) -> Vec<Rgba<f32>> {
     let img = image::open(path)
@@ -173,24 +162,22 @@ fn atlas_u_offset(block: MyBlock, face: QuadFace) -> f32 {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Vertex type
-// ---------------------------------------------------------------------------
 
 #[derive(Clone)]
 struct Vertex {
     pos: Vec4<f32>,
     uv: Vec2<f32>,
     normal: Vec3<f32>,
-    // Which block produced this quad (used for render pass filtering).
+    // Block that produced this quad, for render pass filtering.
     block: MyBlock,
     // Pre-computed atlas tile offset for this face.
     atlas_offset: f32,
-    // Whether this vertex belongs to a two-sided quad (diagonals, facades).
+    // Whether this vertex belongs to a two-sided quad.
     two_sided: bool,
 }
 
-// Interpolated data passed from vertex to fragment shader.
+// Interpolated vertex-to-fragment data.
 #[derive(Clone)]
 struct VsOut {
     uv: Vec2<f32>,
@@ -220,9 +207,7 @@ impl std::ops::Add for VsOut {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Pipeline
-// ---------------------------------------------------------------------------
 
 struct ChunkPipeline<'a> {
     mvp: Mat4<f32>,
@@ -254,7 +239,7 @@ impl<'r, 'a: 'r> Pipeline<'r> for ChunkPipeline<'a> {
 
     fn vertex(&self, v: &Self::Vertex) -> ([f32; 4], Self::VertexData) {
         let mut clip = self.mvp * v.pos;
-        // Flip Y so the image isn't upside-down (euc rasterises with Y-down).
+        // Flip Y since euc rasterizes with Y-down.
         clip.y = -clip.y;
         (
             clip.into_array(),
@@ -300,9 +285,7 @@ impl<'r, 'a: 'r> Pipeline<'r> for ChunkPipeline<'a> {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Scene construction
-// ---------------------------------------------------------------------------
 
 fn build_chunk() -> PaddedChunk<MyBlock> {
     use glam::UVec3;
@@ -352,7 +335,7 @@ fn build_chunk() -> PaddedChunk<MyBlock> {
         }
     }
 
-    // Chains surrounding the building, demonstrating all 3 cross root axes.
+    // Chains surrounding the building (all 3 cross root axes).
     // Vertical chains (Y-axis) hanging from canopy corners.
     for &(cx, cz) in &[
         (1, 5),
@@ -416,7 +399,7 @@ fn build_chunk() -> PaddedChunk<MyBlock> {
     chunk
 }
 
-/// Convert voxmesh quads into triangle vertices suitable for euc.
+/// Converts voxmesh quads into triangle vertices suitable for euc.
 /// Diagonal quads are tagged so the caller can render them two-sided.
 fn quads_to_vertices(quads: &Quads, chunk: &PaddedChunk<MyBlock>) -> Vec<Vertex> {
     let mut verts = Vec::new();
@@ -457,9 +440,7 @@ fn quads_to_vertices(quads: &Quads, chunk: &PaddedChunk<MyBlock>) -> Vec<Vertex>
     verts
 }
 
-// ---------------------------------------------------------------------------
 // Main
-// ---------------------------------------------------------------------------
 
 fn main() {
     let [w, h]: [usize; 2] = [800, 600];
@@ -476,7 +457,7 @@ fn main() {
 
     let vertices = quads_to_vertices(&quads, &chunk);
 
-    // Camera: look at the chunk center from an elevated angle.
+    // Camera looking at the chunk center from an elevated angle.
     let center = Vec3::new(8.0, 3.0, 8.0);
     let eye = Vec3::new(-6.0, 14.0, -6.0);
     let up = Vec3::new(0.0, 1.0, 0.0);
@@ -531,7 +512,7 @@ fn main() {
         pipeline.render(opaque_verts.iter().map(|v| *v), &mut color, &mut depth);
     }
 
-    // Two-sided geometry (cross-shaped billboards, facades) — no backface culling.
+    // Two-sided geometry (cross-shaped billboards, facades), no backface culling.
     let two_sided_verts: Vec<&Vertex> = vertices.iter().filter(|v| v.two_sided).collect();
     if !two_sided_verts.is_empty() {
         diag_pipeline.render(two_sided_verts.iter().map(|v| *v), &mut color, &mut depth);

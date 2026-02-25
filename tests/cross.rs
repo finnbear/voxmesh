@@ -239,7 +239,7 @@ fn merged_cross_texture_coordinates_scale_vertically() {
     }
 }
 
-// ---- Root face tests ----
+// Root face tests
 
 #[test]
 fn cross_posy_root_crosses_in_xz_plane() {

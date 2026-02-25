@@ -6,14 +6,15 @@ use crate::face::{Axis, DiagonalFace, Face, QuadFace};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Quad {
-    /// Position of the lowest-coordinate corner, in 1/16's of a block, in the padded 3D space of the chunk.
+    /// Position of the lowest-coordinate corner in 1/16ths of a block,
+    /// in the padded 3D space of the chunk.
     origin_padded: UVec3,
-    /// Size of the quad in 1/16's of a block.
+    /// Size of the quad in 1/16ths of a block.
     size: UVec2,
 }
 
-/// Returns the (u_direction, v_direction) tangent vectors for a face.
-/// u corresponds to size.x, v corresponds to size.y.
+/// Returns the (u, v) tangent vectors for a face.
+/// u corresponds to `size.x`, v corresponds to `size.y`.
 /// Matches the block-mesh axis permutation convention (Xzy, Yzx, Zxy).
 fn face_tangents(face: Face) -> (Vec3, Vec3) {
     match face {
@@ -24,13 +25,13 @@ fn face_tangents(face: Face) -> (Vec3, Vec3) {
 }
 
 impl Quad {
-    /// Returns the minimum voxel coordinate (not including padding) of the
-    /// block that produced this quad. Use this to look up the block type in a
-    /// chunk or flat voxel array.
+    /// Returns the minimum voxel coordinate (excluding padding) of the
+    /// block that produced this quad. Use this to look up the block type
+    /// in a chunk or flat voxel array.
     ///
-    /// `face` must match the face under which this quad was generated (an
+    /// `face` must match the face under which this quad was generated: an
     /// axis-aligned [`Face`] for quads from [`Quads::faces`], or a
-    /// [`DiagonalFace`] for quads from [`Quads::diagonals`]).
+    /// [`DiagonalFace`] for quads from [`Quads::diagonals`].
     pub fn voxel_position(&self, face: impl Into<QuadFace>) -> UVec3 {
         let ft = FULL_THICKNESS;
         let pad = PADDING as u32;
@@ -41,7 +42,7 @@ impl Quad {
                 for axis in 0..3 {
                     let o = self.origin_padded[axis];
                     if axis == normal_idx && f.is_positive() {
-                        // Positive faces sit at the far edge; step back.
+                        // Positive faces sit at the far edge, step back.
                         result[axis] = (o - 1) / ft - pad;
                     } else {
                         result[axis] = o / ft - pad;
@@ -58,11 +59,11 @@ impl Quad {
     }
 
     /// Returns the 4 vertex positions for this quad in CCW winding order
-    /// (viewed from outside).
+    /// when viewed from outside.
     ///
     /// For diagonal ([`Shape::Cross`]) faces, the shape's [`CrossInfo`]
-    /// determines the stretch and orientation. For axis-aligned faces the
-    /// shape is ignored.
+    /// determines the stretch and orientation. For axis-aligned faces,
+    /// the shape is ignored.
     pub fn positions(&self, face: impl Into<QuadFace>, shape: Shape) -> [Vec3; 4] {
         match face.into() {
             QuadFace::Aligned(face) => {
@@ -79,8 +80,8 @@ impl Quad {
                 let dv = v_dir * self.size.y as f32 * scale;
 
                 // Emit CCW winding when viewed from outside. The vertex order
-                // [base, base+du, base+du+dv, base+dv] is CCW when u×v aligns with
-                // the outward normal. When u×v opposes it, swap du/dv offsets.
+                // [base, base+du, base+du+dv, base+dv] is CCW when u x v
+                // aligns with the outward normal. Otherwise swap du/dv.
                 if face.tangent_cross_positive() {
                     [base, base + du, base + du + dv, base + dv]
                 } else {
@@ -98,7 +99,7 @@ impl Quad {
                 let scale = 1.0 / FULL_THICKNESS as f32;
                 let pad = PADDING as f32;
 
-                // The root face's axis is the merge/height axis.
+                // The root face axis is the merge/height axis.
                 // The two perpendicular axes form the crossing plane.
                 let merge_axis = info.face.axis().index();
                 let (cross_a, cross_b) = cross_axes(info.face.axis());
@@ -117,8 +118,8 @@ impl Quad {
 
                 let half_diag = 0.5 + info.stretch as f32 * scale;
 
-                // DiagonalFace direction is in the XZ plane (components .x and .z).
-                // Map those two components onto our crossing axes.
+                // DiagonalFace direction is in the XZ plane (.x and .z).
+                // Map those two components onto the crossing axes.
                 let dir = diag.direction();
                 let da = dir.x * half_diag;
                 let db = dir.z * half_diag;
@@ -153,8 +154,8 @@ impl Quad {
 
     /// Returns the 4 texture coordinates for this quad.
     ///
-    /// `u_flip_face` and `flip_v` control UV mirroring for axis-aligned faces
-    /// and are ignored for diagonal faces.
+    /// `u_flip_face` and `flip_v` control UV mirroring for axis-aligned
+    /// faces and are ignored for diagonal faces.
     pub fn texture_coordinates(
         &self,
         face: impl Into<QuadFace>,
@@ -209,16 +210,15 @@ impl Quad {
         }
     }
 
-    /// Returns the 6 vertex indices for this quad (two triangles), suitable for
-    /// indexed drawing.
+    /// Returns the 6 vertex indices for this quad (two triangles),
+    /// suitable for indexed drawing.
     ///
-    /// `start` is the index of the first vertex of this quad in the vertex
-    /// buffer. The returned indices reference vertices in the order produced by
-    /// [`positions`](Self::positions) or
-    /// [`diagonal_positions`](Self::diagonal_positions), which is always
-    /// counter-clockwise when viewed from outside.
+    /// `start` is the index of the first vertex of this quad in the
+    /// vertex buffer. The returned indices reference vertices in the
+    /// order produced by [`positions`](Self::positions), which is always
+    /// CCW when viewed from outside.
     ///
-    /// The winding is compatible with block-mesh-rs's `quad_mesh_indices`.
+    /// The winding is compatible with block-mesh-rs `quad_mesh_indices`.
     #[inline]
     pub fn indices(start: u32) -> [u32; 6] {
         [start, start + 1, start + 2, start, start + 2, start + 3]
@@ -231,15 +231,14 @@ pub struct Quads {
     pub diagonals: [Vec<Quad>; 2],
 }
 
-// ---------------------------------------------------------------------------
 // Greedy meshing internals
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct MaskEntry<B: Block> {
     block: B,
-    /// Face surface position along the normal axis, in 1/16ths from the block's
-    /// min-normal coordinate. Whole-block positive face = 16, negative = 0.
+    /// Face surface position along the normal axis in 1/16ths from the
+    /// block min-normal coordinate. Whole-block positive face = 16,
+    /// negative = 0.
     normal_pos: u8,
     /// Quad start within the block along u, in 1/16ths.
     u_intra_offset: u8,
@@ -251,8 +250,8 @@ struct MaskEntry<B: Block> {
     v_intra_extent: u8,
 }
 
-/// Returns the two axis indices perpendicular to the given axis.
-/// Used by diagonal cross blocks to determine the crossing plane.
+/// Returns the two axis indices perpendicular to the given axis,
+/// used by diagonal cross blocks to determine the crossing plane.
 #[inline]
 fn cross_axes(axis: Axis) -> (usize, usize) {
     match axis {
@@ -272,29 +271,29 @@ fn face_axis_indices(face: Face) -> (usize, usize, usize) {
     }
 }
 
-/// Whether the neighbor fully covers the block's face region on the shared
-/// boundary. For whole-blocks this is simple; for slabs we must check whether
-/// the neighbor occupies at least the same sub-region as the block along the
+/// Whether the neighbor fully covers the block's face region on the
+/// shared boundary. For whole-blocks this is trivial. For slabs, checks
+/// whether the neighbor occupies at least the same sub-region along the
 /// slab axis.
 fn neighbor_covers_face_region<B: Block>(block: &B, neighbor: &B, face: Face) -> bool {
     match neighbor.shape() {
         Shape::WholeBlock => true,
         // Cross and facade blocks never cover any face region.
         Shape::Cross(_) | Shape::Facade(_) => false,
-        // Inset blocks cover top/bottom (flush) but not sides (recessed).
+        // Inset blocks cover top/bottom (flush) but not sides (inset).
         Shape::Inset(_) => face.axis() == Axis::Y,
         Shape::Slab(n_info) => {
-            // The neighbor slab is flush against our face on this boundary
-            // only if its slab face equals our face's opposite.
+            // The neighbor slab is flush against our face only if its
+            // slab face equals our face's opposite.
             if n_info.face == face.opposite() {
                 return true;
             }
-            // For side faces: if the block is also a slab with the same axis
+            // For side faces: if the block is also a slab on the same axis
             // and the neighbor covers at least the block's extent, it culls.
             if let Shape::Slab(b_info) = block.shape() {
                 if b_info.face.axis() == n_info.face.axis() && face.axis() != b_info.face.axis() {
-                    // Both slabs share the same axis; the neighbor covers our
-                    // region if its thickness is >= ours on the same side.
+                    // Both slabs share the same axis. The neighbor covers
+                    // our region if its thickness >= ours on the same side.
                     return b_info.face == n_info.face && n_info.thickness >= b_info.thickness;
                 }
             }
@@ -304,7 +303,7 @@ fn neighbor_covers_face_region<B: Block>(block: &B, neighbor: &B, face: Face) ->
 }
 
 /// Whether the current block's face is culled by the given neighbor.
-/// Only call this for faces that sit at the block boundary (flush / side).
+/// Only valid for faces at the block boundary (flush or side).
 fn is_culled_at_boundary<B: Block>(block: &B, neighbor: &B, face: Face) -> bool {
     if !neighbor_covers_face_region(block, neighbor, face) {
         return false;
@@ -316,9 +315,9 @@ fn is_culled_at_boundary<B: Block>(block: &B, neighbor: &B, face: Face) -> bool 
     }
 }
 
-/// Compute the mask entry for a block/face based purely on shape, ignoring
-/// neighbor culling. Returns `None` only for the inner (non-flush) face of a
-/// slab along its own axis.
+/// Compute the mask entry for a block/face based purely on shape,
+/// ignoring neighbor culling. Returns `None` for faces that never
+/// emit geometry (cross blocks, non-matching facades, etc.).
 #[inline]
 fn mask_entry_for_shape<B: Block>(
     block: &B,
@@ -330,7 +329,7 @@ fn mask_entry_for_shape<B: Block>(
     match block.shape() {
         // Cross blocks have no axis-aligned faces.
         Shape::Cross(_) => return None,
-        // Facade emits exactly one quad on its own face, offset 1/16 inward.
+        // Facade emits one quad on its own face, offset 1/16 inward.
         Shape::Facade(facade_face) => {
             if face != facade_face {
                 return None;
@@ -347,7 +346,7 @@ fn mask_entry_for_shape<B: Block>(
         }
         Shape::WholeBlock | Shape::Inset(_) => {
             let normal_pos = if let Shape::Inset(n) = block.shape() {
-                // Side faces are inset; top/bottom are flush.
+                // Side faces are inset, top/bottom are flush.
                 if face.axis() == Axis::Y {
                     if face.is_positive() {
                         ft
@@ -388,10 +387,10 @@ fn mask_entry_for_shape<B: Block>(
             };
 
             if face.axis() == info.face.axis() {
-                // The inner face of a slab (opposite its flush face) is never
-                // at the block boundary, so it always emits geometry. The
-                // flush face may be culled by a neighbor, but that is handled
-                // by the caller.
+                // The inner face of a slab (opposite its flush face) is
+                // never at the block boundary, so it always emits
+                // geometry. The flush face may be culled by a neighbor
+                // but that is handled by the caller.
                 let normal_pos = if face.is_positive() {
                     slab_max
                 } else {
@@ -428,8 +427,8 @@ fn mask_entry_for_shape<B: Block>(
     }
 }
 
-/// Compute the mask entry for a slab block/face combination, or `None` if the
-/// face is not visible. Only called when `block.shape()` is `Slab`.
+/// Compute the mask entry for a slab block/face combination, or `None`
+/// if the face is not visible. Only called when `block.shape()` is `Slab`.
 #[inline]
 fn compute_slab_mask_entry<B: Block>(
     block: &B,
@@ -443,13 +442,13 @@ fn compute_slab_mask_entry<B: Block>(
         Shape::WholeBlock | Shape::Cross(_) | Shape::Facade(_) | Shape::Inset(_) => unreachable!(),
     };
 
-    // For the flush face of the slab along its own axis, check neighbor culling.
+    // Flush face along the slab's own axis: check neighbor culling.
     if face.axis() == info.face.axis() && face == info.face {
         if is_culled_at_boundary(block, neighbor, face) {
             return None;
         }
     } else if face.axis() != info.face.axis() {
-        // Side faces: check neighbor culling.
+        // Side faces: normal neighbor culling.
         if is_culled_at_boundary(block, neighbor, face) {
             return None;
         }
@@ -459,7 +458,7 @@ fn compute_slab_mask_entry<B: Block>(
 }
 
 impl Quads {
-    /// Create an empty `Quads` with no allocations.
+    /// Creates an empty `Quads` with no allocations.
     pub fn new() -> Self {
         Quads {
             faces: [vec![], vec![], vec![], vec![], vec![], vec![]],
@@ -467,7 +466,7 @@ impl Quads {
         }
     }
 
-    /// Clear all face lists without freeing their backing allocations.
+    /// Clears all face lists without freeing their backing allocations.
     pub fn reset(&mut self) {
         for face in &mut self.faces {
             face.clear();
@@ -491,7 +490,7 @@ impl Quads {
     /// for qf in QuadFace::ALL {
     ///     for quad in quads.get(qf) {
     ///         let vp = quad.voxel_position(qf);
-    ///         // …
+    ///         // ...
     ///     }
     /// }
     /// ```
@@ -515,8 +514,9 @@ pub fn greedy_mesh<B: Block>(chunk: &PaddedChunk<B>) -> Quads {
     quads
 }
 
-/// Returns (n_stride, u_stride, v_stride) as linear index steps into the
-/// padded chunk array, matching the tangent convention in [`face_tangents`].
+/// Returns (n_stride, u_stride, v_stride) as linear index steps into
+/// the padded chunk array, matching the tangent convention in
+/// [`face_tangents`].
 #[inline]
 fn face_strides(face: Face) -> (usize, usize, usize) {
     const P: usize = PADDED;
@@ -528,13 +528,14 @@ fn face_strides(face: Face) -> (usize, usize, usize) {
     }
 }
 
-/// Convert a [`MaskEntry`] into a [`Quad`].
+/// Converts a [`MaskEntry`] into a [`Quad`].
 ///
-/// - `normal_idx`, `u_idx`, `v_idx`: axis indices from [`face_axis_indices`].
-/// - `normal_block`, `u_block`, `v_block`: block-level position along each
-///   axis, already including any padding offset.
-/// - `width`, `height`: number of blocks merged along u / v (1 when not
-///   doing greedy merging).
+/// - `normal_idx`, `u_idx`, `v_idx`: axis indices from
+///   [`face_axis_indices`].
+/// - `normal_block`, `u_block`, `v_block`: block-level position along
+///   each axis, already including any padding offset.
+/// - `width`, `height`: number of blocks merged along u/v (1 when not
+///   greedy merging).
 #[inline]
 fn emit_quad<B: Block>(
     entry: &MaskEntry<B>,
@@ -562,20 +563,19 @@ fn emit_quad<B: Block>(
     }
 }
 
-/// Emit diagonal quads for a cross-shaped block into `quads`.
+/// Emits diagonal quads for a cross-shaped block into `quads`.
 ///
-/// `block_pos` contains the block-level position (including padding) for
-/// each axis. `root_face` determines orientation: its axis is the merge
-/// axis, and `merge_len` is the number of blocks merged along it.
+/// `block_pos` is the block-level position (including padding) per axis.
+/// `root_face` determines orientation: its axis is the merge axis, and
+/// `merge_len` is the number of blocks merged along it.
 #[inline]
 fn emit_cross_quads(quads: &mut Quads, block_pos: [u32; 3], root_face: Face, merge_len: u32) {
     let ft32 = FULL_THICKNESS;
     let merge_axis = root_face.axis().index();
     let (cross_a, cross_b) = cross_axes(root_face.axis());
 
-    // origin_padded: crossing axes use block_pos directly, merge axis uses block_pos.
-    // size: x = FULL_THICKNESS (one block wide in the crossing plane),
-    //        y = merge_len * FULL_THICKNESS (merged along the merge axis).
+    // size.x = one block wide in the crossing plane.
+    // size.y = merge_len blocks along the merge axis.
     let mut origin = [0u32; 3];
     origin[cross_a] = block_pos[cross_a] * ft32;
     origin[cross_b] = block_pos[cross_b] * ft32;
@@ -589,13 +589,13 @@ fn emit_cross_quads(quads: &mut Quads, block_pos: [u32; 3], root_face: Face, mer
     }
 }
 
-/// Produce quads for a single block placed at the origin with all faces
-/// exposed (no neighbor culling). Useful for rendering held items or dropped
-/// block entities.
+/// Produces quads for a single block at the origin with all faces
+/// exposed (no neighbor culling). Useful for rendering held items or
+/// dropped block entities.
 ///
-/// The resulting [`Quad`] positions span `[0, 1]` (or the appropriate
-/// sub-range for slabs), the same coordinate space as a block at `(0,0,0)` in
-/// a chunk.
+/// The resulting [`Quad`] positions span [0, 1] (or the appropriate
+/// sub-range for slabs), the same coordinate space as a block at
+/// (0,0,0) in a chunk.
 pub fn block_faces<B: Block>(block: &B) -> Quads {
     let mut quads = Quads::new();
     block_faces_into(block, &mut quads);
@@ -636,17 +636,17 @@ pub fn block_faces_into<B: Block>(block: &B, quads: &mut Quads) {
     }
 }
 
-/// Like [`greedy_mesh`], but reuses an existing [`Quads`] buffer.
+/// Like [`greedy_mesh`] but reuses an existing [`Quads`] buffer.
 ///
-/// The buffer is [`reset`](Quads::reset) before meshing, so previous contents
-/// are cleared but backing allocations are preserved across calls.
+/// The buffer is [`reset`](Quads::reset) before meshing, so previous
+/// contents are cleared but backing allocations are preserved.
 pub fn greedy_mesh_into<B: Block>(chunk: &PaddedChunk<B>, quads: &mut Quads) {
     quads.reset();
     let ft = FULL_THICKNESS as u8;
     let data = &chunk.data;
 
-    // Mask is hoisted outside the layer loop — the build phase overwrites every
-    // cell unconditionally so the previous layer's values don't matter.
+    // Mask is hoisted outside the layer loop. The build phase overwrites
+    // every cell unconditionally so previous values do not matter.
     let mut mask: [[Option<MaskEntry<B>>; CHUNK_SIZE]; CHUNK_SIZE] =
         [[None; CHUNK_SIZE]; CHUNK_SIZE];
 
@@ -672,9 +672,9 @@ pub fn greedy_mesh_into<B: Block>(chunk: &PaddedChunk<B>, quads: &mut Quads) {
                     let n_idx = (idx as isize + neighbor_stride) as usize;
                     debug_assert!(n_idx < data.len());
 
-                    // SAFETY: The PADDING ring guarantees all indices
-                    // (including the neighbor one step along the normal) are
-                    // within the PADDED_VOLUME array.
+                    // SAFETY: the padding ring guarantees all indices
+                    // (including the neighbor one step along the normal)
+                    // are within the PADDED_VOLUME array.
                     let (block, neighbor) =
                         unsafe { (data.get_unchecked(idx), data.get_unchecked(n_idx)) };
 
@@ -684,8 +684,8 @@ pub fn greedy_mesh_into<B: Block>(chunk: &PaddedChunk<B>, quads: &mut Quads) {
                         if is_culled_at_boundary(block, neighbor, face) {
                             None
                         } else {
-                            // WholeBlock fast path: normal_pos is constant for
-                            // the entire face, avoid full shape dispatch.
+                            // WholeBlock fast path: normal_pos is constant
+                            // for the entire face, skip shape dispatch.
                             Some(MaskEntry {
                                 block: *block,
                                 normal_pos: whole_normal_pos,
@@ -699,19 +699,19 @@ pub fn greedy_mesh_into<B: Block>(chunk: &PaddedChunk<B>, quads: &mut Quads) {
                         // Cross blocks are handled in a separate pass.
                         None
                     } else if matches!(block.shape(), Shape::Facade(_)) {
-                        // Facade quads are offset 1/16 inward, never at the
-                        // block boundary, so skip neighbor culling entirely.
+                        // Facade quads are offset 1/16 inward, never at
+                        // the block boundary, so skip neighbor culling.
                         mask_entry_for_shape(block, face, u_idx, v_idx)
                     } else if matches!(block.shape(), Shape::Inset(_)) {
                         if face.axis() == Axis::Y {
-                            // Top/bottom at boundary — normal culling.
+                            // Top/bottom at boundary, normal culling.
                             if is_culled_at_boundary(block, neighbor, face) {
                                 None
                             } else {
                                 mask_entry_for_shape(block, face, u_idx, v_idx)
                             }
                         } else {
-                            // Side faces inset — no neighbor culling.
+                            // Side faces are inset, no neighbor culling.
                             mask_entry_for_shape(block, face, u_idx, v_idx)
                         }
                     } else {
@@ -723,7 +723,7 @@ pub fn greedy_mesh_into<B: Block>(chunk: &PaddedChunk<B>, quads: &mut Quads) {
                 v_base += v_stride;
             }
 
-            // Greedy merge.
+            // Greedy merge phase.
             for v in 0..CHUNK_SIZE {
                 let mut u = 0;
                 while u < CHUNK_SIZE {
@@ -785,10 +785,8 @@ pub fn greedy_mesh_into<B: Block>(chunk: &PaddedChunk<B>, quads: &mut Quads) {
         }
     }
 
-    // Cross-block pass: for each merge axis, scan columns along that axis
-    // and merge consecutive identical cross blocks.
-    //
-    // Strides into the padded array: X=1, Y=PADDED, Z=PADDED*PADDED.
+    // Cross-block pass: for each merge axis, scan columns along that
+    // axis and merge consecutive identical cross blocks.
     let axis_strides = [1usize, PADDED, PADDED * PADDED];
 
     for merge_axis in 0..3usize {

@@ -35,8 +35,8 @@ impl MergeVoxel for BmVoxel {
 
 type PaddedShape = ConstShape3u32<18, 18, 18>;
 
-/// Map a block-mesh face index to a voxmesh Face.
-/// block-mesh RIGHT_HANDED_Y_UP_CONFIG order: [-X, -Y, -Z, +X, +Y, +Z]
+/// Maps a block-mesh face index to a voxmesh `Face`.
+/// block-mesh RIGHT_HANDED_Y_UP_CONFIG order: -X, -Y, -Z, +X, +Y, +Z.
 fn bm_face_index_to_face(i: usize) -> Face {
     match i {
         0 => Face::NegX,
@@ -49,14 +49,14 @@ fn bm_face_index_to_face(i: usize) -> Face {
     }
 }
 
-/// Compare indices for a single opaque block at (0,0,0) between voxmesh and
-/// block-mesh. Both should produce triangles with the same winding when the
-/// vertices are matched by world-position.
+/// Compares indices for a single opaque block at (0,0,0) between
+/// voxmesh and block-mesh. Both should produce triangles with the same
+/// winding when vertices are matched by position.
 #[test]
 fn single_block_indices_match_block_mesh() {
     let config = &RIGHT_HANDED_Y_UP_CONFIG;
 
-    // -- Run block-mesh ---------------------------------------------------
+    // Run block-mesh.
     let mut bm_voxels = [BmVoxel::Air; PaddedShape::SIZE as usize];
     let idx = PaddedShape::linearize([1, 1, 1]) as usize;
     bm_voxels[idx] = BmVoxel::Stone;
@@ -71,10 +71,10 @@ fn single_block_indices_match_block_mesh() {
         &mut buffer,
     );
 
-    // -- Run voxmesh ------------------------------------------------------
+    // Run voxmesh.
     let vm_quads = common::mesh_single(TestBlock::Stone);
 
-    // -- Compare per face -------------------------------------------------
+    // Compare per face.
     for (bm_face_idx, bm_face_quads) in buffer.quads.groups.iter().enumerate() {
         let face = bm_face_index_to_face(bm_face_idx);
         let oriented_face = &config.faces[bm_face_idx];
@@ -90,8 +90,8 @@ fn single_block_indices_match_block_mesh() {
         // voxmesh positions.
         let vm_positions = vm_quad.positions(face, Shape::WholeBlock);
 
-        // Build a mapping: for each block-mesh vertex index, find the
-        // matching voxmesh vertex index (by position).
+        // Map each block-mesh vertex index to the matching voxmesh
+        // vertex index by position.
         let bm_to_vm: [usize; 4] = std::array::from_fn(|bm_i| {
             vm_positions
                 .iter()
@@ -114,8 +114,7 @@ fn single_block_indices_match_block_mesh() {
         // Remap block-mesh indices into voxmesh vertex space.
         let bm_indices_in_vm: [u32; 6] = bm_indices.map(|i| bm_to_vm[i as usize] as u32);
 
-        // Both sets of indices should form triangles with the same winding.
-        // Compare triangle normals (cross products).
+        // Both index sets should form triangles with the same winding.
         for tri in 0..2 {
             let base = tri * 3;
             let bm_tri = [
@@ -135,22 +134,22 @@ fn single_block_indices_match_block_mesh() {
             assert!(
                 bm_normal.dot(vm_normal) > 0.0,
                 "face {face:?}, triangle {tri}: winding mismatch.\n\
-                 block-mesh tri (in vm space): {bm_tri:?} → normal {bm_normal:?}\n\
-                 voxmesh tri: {vm_tri:?} → normal {vm_normal:?}",
+                 block-mesh tri (in vm space): {bm_tri:?} normal={bm_normal:?}\n\
+                 voxmesh tri: {vm_tri:?} normal={vm_normal:?}",
             );
         }
     }
 }
 
-/// Compare texture coordinates for a single opaque block at (0,0,0)
-/// between voxmesh and block-mesh. UVs are matched by vertex world-position
-/// so that vertex ordering differences don't cause false failures.
+/// Compares texture coordinates for a single opaque block at (0,0,0)
+/// between voxmesh and block-mesh. UVs are matched by vertex position
+/// so that ordering differences don't cause false failures.
 #[test]
 fn single_block_tex_coords_match_block_mesh() {
     let config = &RIGHT_HANDED_Y_UP_CONFIG;
     let flip_v = false;
 
-    // -- Run block-mesh ---------------------------------------------------
+    // Run block-mesh.
     let mut bm_voxels = [BmVoxel::Air; PaddedShape::SIZE as usize];
     // Place stone at padded (1,1,1) = unpadded (0,0,0).
     let idx = PaddedShape::linearize([1, 1, 1]) as usize;
@@ -166,10 +165,10 @@ fn single_block_tex_coords_match_block_mesh() {
         &mut buffer,
     );
 
-    // -- Run voxmesh ------------------------------------------------------
+    // Run voxmesh.
     let vm_quads = common::mesh_single(TestBlock::Stone);
 
-    // -- Compare per face -------------------------------------------------
+    // Compare per face.
     for (bm_face_idx, bm_face_quads) in buffer.quads.groups.iter().enumerate() {
         let face = bm_face_index_to_face(bm_face_idx);
         let oriented_face = &config.faces[bm_face_idx];
@@ -189,8 +188,7 @@ fn single_block_tex_coords_match_block_mesh() {
         let bm_quad = &bm_face_quads[0];
         let vm_quad = &vm_face_quads[0];
 
-        // block-mesh positions (voxel_size = 1.0). These are in the padded
-        // coordinate space, so subtract 1 to get chunk-local coords.
+        // block-mesh positions in padded space, subtract 1 for chunk-local.
         let bm_positions: [[f32; 3]; 4] = oriented_face
             .quad_mesh_positions(bm_quad, 1.0)
             .map(|p| [p[0] - 1.0, p[1] - 1.0, p[2] - 1.0]);

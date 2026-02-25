@@ -11,13 +11,13 @@ pub enum TestBlock {
     Leaves,
     UpperSlab, // PosY slab, thickness 8
     LowerSlab, // NegY slab, thickness 8
-    SugarCane, // Cross(NegY, 0) — diagonal billboard, no stretch
-    Cobweb,    // Cross(NegY, 4) — diagonal billboard, stretched
-    Ladder,    // Facade(PosX) — flat face on +X side
-    Rail,      // Facade(NegY) — flat face on bottom
-    Cactus,    // Inset(1) — horizontal faces inset by 1/16
-    Chain,     // Cross(PosY, 0) — hanging cross, merges along Y
-    Vine,      // Cross(PosX, 0) — wall-mounted cross, merges along X
+    SugarCane, // Cross(NegY, 0), diagonal billboard, no stretch
+    Cobweb,    // Cross(NegY, 4), diagonal billboard, stretched
+    Ladder,    // Facade(PosX), flat face on +X side
+    Rail,      // Facade(NegY), flat face on bottom
+    Cactus,    // Inset(1), horizontal faces inset by 1/16
+    Chain,     // Cross(PosY, 0), hanging cross, merges along Y
+    Vine,      // Cross(PosX, 0), wall-mounted cross, merges along X
 }
 
 impl Block for TestBlock {
@@ -72,8 +72,7 @@ impl Block for TestBlock {
     }
 }
 
-/// Mesh a chunk containing only the given block placements.
-/// Returns the `Quads` produced by `greedy_mesh`.
+/// Meshes a chunk containing only the given block placements.
 pub fn mesh_with(blocks: &[(u32, u32, u32, TestBlock)]) -> Quads {
     let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
     for &(x, y, z, block) in blocks {
@@ -82,23 +81,23 @@ pub fn mesh_with(blocks: &[(u32, u32, u32, TestBlock)]) -> Quads {
     greedy_mesh(&chunk)
 }
 
-/// Mesh a single block at (0,0,0).
+/// Meshes a single block at (0,0,0).
 pub fn mesh_single(block: TestBlock) -> Quads {
     mesh_with(&[(0, 0, 0, block)])
 }
 
-/// Number of quads on a specific face.
+/// Returns the number of quads on a specific face.
 pub fn face_count(q: &Quads, face: Face) -> usize {
     q.faces[face.index()].len()
 }
 
-/// Get vertex positions of the first quad on a given face.
+/// Returns vertex positions of the first quad on a given face.
 pub fn first_face_positions(q: &Quads, face: Face) -> [glam::Vec3; 4] {
     q.faces[face.index()][0].positions(face, Shape::WholeBlock)
 }
 
-/// Assert all vertices of the first quad on `face` have `axis_val` on the
-/// given component (0=x, 1=y, 2=z).
+/// Asserts all vertices of the first quad on `face` have the expected
+/// value on the given component (0=x, 1=y, 2=z).
 pub fn assert_face_on_plane(q: &Quads, face: Face, axis: usize, expected: f32) {
     let verts = first_face_positions(q, face);
     let label = ["x", "y", "z"][axis];
@@ -111,8 +110,8 @@ pub fn assert_face_on_plane(q: &Quads, face: Face, axis: usize, expected: f32) {
     }
 }
 
-/// Return (min, max) of a component (0=x, 1=y, 2=z) across all vertices
-/// of the first quad on `face`.
+/// Returns (min, max) of a component (0=x, 1=y, 2=z) across all
+/// vertices of the first quad on `face`.
 pub fn face_vertex_range(q: &Quads, face: Face, axis: usize) -> (f32, f32) {
     let verts = first_face_positions(q, face);
     let vals: Vec<f32> = verts.iter().map(|v| [v.x, v.y, v.z][axis]).collect();
@@ -122,8 +121,8 @@ pub fn face_vertex_range(q: &Quads, face: Face, axis: usize) -> (f32, f32) {
     )
 }
 
-/// Assert the winding of the first quad on `face` is CCW when viewed from
-/// outside (i.e. triangle (v0,v1,v2) normal aligns with face normal).
+/// Asserts the winding of the first quad on `face` is CCW when viewed
+/// from outside (triangle (v0,v1,v2) normal aligns with face normal).
 pub fn assert_ccw_winding(q: &Quads, face: Face) {
     let v = first_face_positions(q, face);
     let normal = face.normal().as_vec3();

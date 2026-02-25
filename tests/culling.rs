@@ -14,14 +14,14 @@ fn two_adjacent_opaque_blocks_cull_shared_face() {
 fn two_different_opaque_blocks_still_cull_shared_face() {
     let q = mesh_with(&[(0, 0, 0, TestBlock::Stone), (1, 0, 0, TestBlock::Dirt)]);
     // Shared face culled (opaque-opaque), but coplanar faces can't merge
-    // across different block types → 2 quads each on 4 side faces + 2 end caps.
+    // across different block types: 2 quads each on 4 side faces + 2 end caps.
     assert_eq!(q.total(), 10);
 }
 
 #[test]
 fn glass_next_to_identical_glass_culls_shared_face() {
     let q = mesh_with(&[(0, 0, 0, TestBlock::Glass), (1, 0, 0, TestBlock::Glass)]);
-    // TransparentMerged between identical blocks → shared face culled.
+    // TransparentMerged between identical blocks, shared face culled.
     assert_eq!(q.total(), 6);
 }
 
@@ -36,7 +36,7 @@ fn glass_next_to_stone_does_not_cull_stone() {
 #[test]
 fn leaves_never_cull_neighbor() {
     let q = mesh_with(&[(0, 0, 0, TestBlock::Leaves), (1, 0, 0, TestBlock::Leaves)]);
-    // TransparentUnmerged never culls → both blocks keep all 6 faces.
+    // TransparentUnmerged never culls, both blocks keep all 6 faces.
     // Coplanar same-type faces merge on PosY/NegY/PosZ/NegZ (4 merged).
     // PosX:1 + NegX:1 + internal PosX:1 + internal NegX:1 + 4 merged = 8.
     assert_eq!(q.total(), 8);
