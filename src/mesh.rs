@@ -885,7 +885,7 @@ mod tests {
     #[test]
     fn block_faces_matches_greedy_mesh_for_single_block() {
         let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
-        chunk.set(0, 0, 0, TestBlock::Stone);
+        chunk.set(UVec3::ZERO, TestBlock::Stone);
         let from_chunk = greedy_mesh(&chunk);
         let from_block = block_faces(&TestBlock::Stone);
         assert_eq!(from_chunk.total(), from_block.total());
@@ -908,7 +908,7 @@ mod tests {
     #[test]
     fn single_block_quad_size_is_one_block() {
         let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
-        chunk.set(0, 0, 0, TestBlock::Stone);
+        chunk.set(UVec3::ZERO, TestBlock::Stone);
         let q = greedy_mesh(&chunk);
         for face in Face::ALL {
             let quad = &q.faces[face.index()][0];
@@ -919,10 +919,10 @@ mod tests {
     #[test]
     fn full_chunk_quad_size_is_sixteen_blocks() {
         let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
-        for x in 0..CHUNK_SIZE {
-            for y in 0..CHUNK_SIZE {
-                for z in 0..CHUNK_SIZE {
-                    chunk.set(x, y, z, TestBlock::Stone);
+        for x in 0..CHUNK_SIZE as u32 {
+            for y in 0..CHUNK_SIZE as u32 {
+                for z in 0..CHUNK_SIZE as u32 {
+                    chunk.set(UVec3::new(x, y, z), TestBlock::Stone);
                 }
             }
         }

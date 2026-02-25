@@ -1,3 +1,5 @@
+use glam::UVec3;
+
 use crate::block::Block;
 
 pub const CHUNK_SIZE: usize = 16;
@@ -6,8 +8,8 @@ pub const PADDED: usize = CHUNK_SIZE + 2 * PADDING; // 18
 pub const PADDED_VOLUME: usize = PADDED * PADDED * PADDED;
 
 #[inline]
-pub fn padded_idx(x: usize, y: usize, z: usize) -> usize {
-    x + y * PADDED + z * PADDED * PADDED
+pub fn padded_idx(pos: UVec3) -> usize {
+    pos.x as usize + pos.y as usize * PADDED + pos.z as usize * PADDED * PADDED
 }
 
 pub struct PaddedChunk<B: Block> {
@@ -22,17 +24,18 @@ impl<B: Block> PaddedChunk<B> {
     }
 
     #[inline]
-    pub fn set(&mut self, x: usize, y: usize, z: usize, block: B) {
-        self.data[padded_idx(x + PADDING, y + PADDING, z + PADDING)] = block;
+    pub fn set(&mut self, pos: UVec3, block: B) {
+        let p = PADDING as u32;
+        self.data[padded_idx(pos + UVec3::splat(p))] = block;
     }
 
     #[inline]
-    pub fn set_padded(&mut self, x: usize, y: usize, z: usize, block: B) {
-        self.data[padded_idx(x, y, z)] = block;
+    pub fn set_padded(&mut self, pos: UVec3, block: B) {
+        self.data[padded_idx(pos)] = block;
     }
 
     #[inline]
-    pub fn get_padded(&self, x: usize, y: usize, z: usize) -> &B {
-        &self.data[padded_idx(x, y, z)]
+    pub fn get_padded(&self, pos: UVec3) -> &B {
+        &self.data[padded_idx(pos)]
     }
 }

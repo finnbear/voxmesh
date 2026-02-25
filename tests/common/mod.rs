@@ -74,10 +74,10 @@ impl Block for TestBlock {
 
 /// Mesh a chunk containing only the given block placements.
 /// Returns the `Quads` produced by `greedy_mesh`.
-pub fn mesh_with(blocks: &[(usize, usize, usize, TestBlock)]) -> Quads {
+pub fn mesh_with(blocks: &[(u32, u32, u32, TestBlock)]) -> Quads {
     let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
     for &(x, y, z, block) in blocks {
-        chunk.set(x, y, z, block);
+        chunk.set(glam::UVec3::new(x, y, z), block);
     }
     greedy_mesh(&chunk)
 }

@@ -25,7 +25,7 @@ fn single_cross_produces_two_diagonal_quads() {
 #[test]
 fn cross_block_faces_matches_greedy_mesh() {
     let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
-    chunk.set(0, 0, 0, TestBlock::SugarCane);
+    chunk.set(glam::UVec3::ZERO, TestBlock::SugarCane);
     let from_chunk = greedy_mesh(&chunk);
     let from_block = block_faces(&TestBlock::SugarCane);
     assert_eq!(from_chunk.total(), from_block.total());

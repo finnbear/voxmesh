@@ -65,7 +65,10 @@ fn blocks_only_in_padding_produce_no_quads() {
                     && z >= PADDING
                     && z < PADDING + CHUNK_SIZE;
                 if !in_real {
-                    chunk.set_padded(x, y, z, TestBlock::Stone);
+                    chunk.set_padded(
+                        glam::UVec3::new(x as u32, y as u32, z as u32),
+                        TestBlock::Stone,
+                    );
                 }
             }
         }

@@ -6,9 +6,9 @@ use voxmesh::*;
 #[test]
 fn flat_layer_merges_into_one_quad_per_face() {
     let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
-    for x in 0..CHUNK_SIZE {
-        for z in 0..CHUNK_SIZE {
-            chunk.set(x, 0, z, TestBlock::Stone);
+    for x in 0..CHUNK_SIZE as u32 {
+        for z in 0..CHUNK_SIZE as u32 {
+            chunk.set(glam::UVec3::new(x, 0, z), TestBlock::Stone);
         }
     }
     let q = greedy_mesh(&chunk);
@@ -21,9 +21,9 @@ fn flat_layer_merges_into_one_quad_per_face() {
 #[test]
 fn flat_slab_layer_merges_into_one_quad_per_face() {
     let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
-    for x in 0..CHUNK_SIZE {
-        for z in 0..CHUNK_SIZE {
-            chunk.set(x, 0, z, TestBlock::LowerSlab);
+    for x in 0..CHUNK_SIZE as u32 {
+        for z in 0..CHUNK_SIZE as u32 {
+            chunk.set(glam::UVec3::new(x, 0, z), TestBlock::LowerSlab);
         }
     }
     let q = greedy_mesh(&chunk);
@@ -36,10 +36,10 @@ fn flat_slab_layer_merges_into_one_quad_per_face() {
 #[test]
 fn full_chunk_same_block_produces_six_quads() {
     let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
-    for x in 0..CHUNK_SIZE {
-        for y in 0..CHUNK_SIZE {
-            for z in 0..CHUNK_SIZE {
-                chunk.set(x, y, z, TestBlock::Stone);
+    for x in 0..CHUNK_SIZE as u32 {
+        for y in 0..CHUNK_SIZE as u32 {
+            for z in 0..CHUNK_SIZE as u32 {
+                chunk.set(glam::UVec3::new(x, y, z), TestBlock::Stone);
             }
         }
     }
@@ -53,10 +53,10 @@ fn full_chunk_same_block_produces_six_quads() {
 #[test]
 fn checkerboard_produces_many_quads() {
     let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
-    for x in 0..CHUNK_SIZE {
-        for z in 0..CHUNK_SIZE {
+    for x in 0..CHUNK_SIZE as u32 {
+        for z in 0..CHUNK_SIZE as u32 {
             if (x + z) % 2 == 0 {
-                chunk.set(x, 0, z, TestBlock::Stone);
+                chunk.set(glam::UVec3::new(x, 0, z), TestBlock::Stone);
             }
         }
     }

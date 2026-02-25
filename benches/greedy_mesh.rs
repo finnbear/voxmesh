@@ -69,10 +69,10 @@ type BmPaddedShape = ConstShape3u32<18, 18, 18>;
 /// Solid 16^3 chunk — worst case for face count (only exterior faces survive).
 fn vm_chunk_solid() -> PaddedChunk<VmBlock> {
     let mut chunk = PaddedChunk::new_filled(VmBlock::Air);
-    for x in 0..CHUNK_SIZE {
-        for y in 0..CHUNK_SIZE {
-            for z in 0..CHUNK_SIZE {
-                chunk.set(x, y, z, VmBlock::Stone);
+    for x in 0..CHUNK_SIZE as u32 {
+        for y in 0..CHUNK_SIZE as u32 {
+            for z in 0..CHUNK_SIZE as u32 {
+                chunk.set(glam::UVec3::new(x, y, z), VmBlock::Stone);
             }
         }
     }
@@ -94,11 +94,11 @@ fn bm_chunk_solid() -> [BmVoxel; BmPaddedShape::SIZE as usize] {
 /// Checkerboard — worst case for merging (no two adjacent same-type blocks).
 fn vm_chunk_checkerboard() -> PaddedChunk<VmBlock> {
     let mut chunk = PaddedChunk::new_filled(VmBlock::Air);
-    for x in 0..CHUNK_SIZE {
-        for y in 0..CHUNK_SIZE {
-            for z in 0..CHUNK_SIZE {
+    for x in 0..CHUNK_SIZE as u32 {
+        for y in 0..CHUNK_SIZE as u32 {
+            for z in 0..CHUNK_SIZE as u32 {
                 if (x + y + z) % 2 == 0 {
-                    chunk.set(x, y, z, VmBlock::Stone);
+                    chunk.set(glam::UVec3::new(x, y, z), VmBlock::Stone);
                 }
             }
         }
@@ -124,11 +124,11 @@ fn bm_chunk_checkerboard() -> [BmVoxel; BmPaddedShape::SIZE as usize] {
 /// Hollow shell — floor + walls + ceiling, interior is air.
 fn vm_chunk_shell() -> PaddedChunk<VmBlock> {
     let mut chunk = PaddedChunk::new_filled(VmBlock::Air);
-    for x in 0..CHUNK_SIZE {
-        for y in 0..CHUNK_SIZE {
-            for z in 0..CHUNK_SIZE {
+    for x in 0..CHUNK_SIZE as u32 {
+        for y in 0..CHUNK_SIZE as u32 {
+            for z in 0..CHUNK_SIZE as u32 {
                 if x == 0 || x == 15 || y == 0 || y == 15 || z == 0 || z == 15 {
-                    chunk.set(x, y, z, VmBlock::Stone);
+                    chunk.set(glam::UVec3::new(x, y, z), VmBlock::Stone);
                 }
             }
         }

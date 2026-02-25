@@ -31,7 +31,7 @@ fn facade_negy_produces_one_quad() {
 #[test]
 fn facade_block_faces_matches_greedy_mesh() {
     let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
-    chunk.set(0, 0, 0, TestBlock::Ladder);
+    chunk.set(glam::UVec3::ZERO, TestBlock::Ladder);
     let from_chunk = greedy_mesh(&chunk);
     let from_block = block_faces(&TestBlock::Ladder);
     assert_eq!(from_chunk.total(), from_block.total());

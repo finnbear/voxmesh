@@ -305,12 +305,14 @@ impl<'r, 'a: 'r> Pipeline<'r> for ChunkPipeline<'a> {
 // ---------------------------------------------------------------------------
 
 fn build_chunk() -> PaddedChunk<MyBlock> {
+    use glam::UVec3;
+
     let mut chunk = PaddedChunk::new_filled(MyBlock::Air);
 
     // Cobblestone floor (y=0).
-    for x in 0..CHUNK_SIZE {
-        for z in 0..CHUNK_SIZE {
-            chunk.set(x, 0, z, MyBlock::Cobblestone);
+    for x in 0..CHUNK_SIZE as u32 {
+        for z in 0..CHUNK_SIZE as u32 {
+            chunk.set(UVec3::new(x, 0, z), MyBlock::Cobblestone);
         }
     }
 
@@ -318,35 +320,35 @@ fn build_chunk() -> PaddedChunk<MyBlock> {
     let pillars = [(2, 2), (2, 13), (13, 2), (13, 13)];
     for &(px, pz) in &pillars {
         for y in 1..6 {
-            chunk.set(px, y, pz, MyBlock::Clay);
+            chunk.set(UVec3::new(px, y, pz), MyBlock::Clay);
         }
     }
 
     // Sugar cane stalks (3 blocks tall).
     for &(sx, sz) in &[(1, 1), (1, 2), (2, 1), (14, 14), (14, 15)] {
         for y in 1..4 {
-            chunk.set(sx, y, sz, MyBlock::SugarCane);
+            chunk.set(UVec3::new(sx, y, sz), MyBlock::SugarCane);
         }
     }
 
     // Cobwebs in the upper corners between pillars.
     for &(cx, cz) in &[(3, 3), (3, 12), (12, 3), (12, 12)] {
-        chunk.set(cx, 5, cz, MyBlock::Cobweb);
+        chunk.set(UVec3::new(cx, 5, cz), MyBlock::Cobweb);
     }
 
     // Debug blocks for UV visualization.
-    chunk.set(7, 1, 5, MyBlock::Debug);
-    chunk.set(9, 1, 5, MyBlock::Debug);
+    chunk.set(UVec3::new(7, 1, 5), MyBlock::Debug);
+    chunk.set(UVec3::new(9, 1, 5), MyBlock::Debug);
 
     // Shrubs scattered around.
     for &(sx, sz) in &[(1, 3), (6, 10), (10, 6), (9, 11), (4, 4)] {
-        chunk.set(sx, 1, sz, MyBlock::Shrub);
+        chunk.set(UVec3::new(sx, 1, sz), MyBlock::Shrub);
     }
 
     // Cactus pillars (3 blocks tall).
     for &(cx, cz) in &[(4, 1), (10, 10)] {
         for y in 1..4 {
-            chunk.set(cx, y, cz, MyBlock::Cactus);
+            chunk.set(UVec3::new(cx, y, cz), MyBlock::Cactus);
         }
     }
 
@@ -363,51 +365,51 @@ fn build_chunk() -> PaddedChunk<MyBlock> {
         (10, 14),
     ] {
         for y in 2..6 {
-            chunk.set(cx, y, cz, MyBlock::ChainY);
+            chunk.set(UVec3::new(cx, y, cz), MyBlock::ChainY);
         }
     }
     // Horizontal chains along X (X-axis) on the z=1 and z=14 walls.
     for x in 4..12 {
-        chunk.set(x, 4, 1, MyBlock::ChainX);
-        chunk.set(x, 4, 14, MyBlock::ChainX);
+        chunk.set(UVec3::new(x, 4, 1), MyBlock::ChainX);
+        chunk.set(UVec3::new(x, 4, 14), MyBlock::ChainX);
     }
     // Horizontal chains along Z (Z-axis) on the x=1 and x=14 walls.
     for z in 4..12 {
-        chunk.set(1, 4, z, MyBlock::ChainZ);
-        chunk.set(14, 4, z, MyBlock::ChainZ);
+        chunk.set(UVec3::new(1, 4, z), MyBlock::ChainZ);
+        chunk.set(UVec3::new(14, 4, z), MyBlock::ChainZ);
     }
 
     // Ladders on the +X face of clay pillars.
     for y in 1..6 {
-        chunk.set(3, y, 2, MyBlock::Ladder);
-        chunk.set(3, y, 13, MyBlock::Ladder);
+        chunk.set(UVec3::new(3, y, 2), MyBlock::Ladder);
+        chunk.set(UVec3::new(3, y, 13), MyBlock::Ladder);
     }
 
     // Rails on the floor along the slab path.
     for i in 3..13 {
-        chunk.set(i, 1, 7, MyBlock::Rail);
+        chunk.set(UVec3::new(i, 1, 7), MyBlock::Rail);
     }
 
     // Glass windows between pillars (along edges).
     for i in 3..13 {
         for y in 1..5 {
-            chunk.set(2, y, i, MyBlock::Glass);
-            chunk.set(13, y, i, MyBlock::Glass);
-            chunk.set(i, y, 2, MyBlock::Glass);
-            chunk.set(i, y, 13, MyBlock::Glass);
+            chunk.set(UVec3::new(2, y, i), MyBlock::Glass);
+            chunk.set(UVec3::new(13, y, i), MyBlock::Glass);
+            chunk.set(UVec3::new(i, y, 2), MyBlock::Glass);
+            chunk.set(UVec3::new(i, y, 13), MyBlock::Glass);
         }
     }
 
     // Cobblestone half-slab path through the interior.
     for i in 3..13 {
-        chunk.set(i, 1, 8, MyBlock::CobbleSlab);
-        chunk.set(8, 1, i, MyBlock::CobbleSlab);
+        chunk.set(UVec3::new(i, 1, 8), MyBlock::CobbleSlab);
+        chunk.set(UVec3::new(8, 1, i), MyBlock::CobbleSlab);
     }
 
     // Leaves canopy on top.
     for x in 1..15 {
         for z in 1..15 {
-            chunk.set(x, 6, z, MyBlock::Leaves);
+            chunk.set(UVec3::new(x, 6, z), MyBlock::Leaves);
         }
     }
 
@@ -422,11 +424,7 @@ fn quads_to_vertices(quads: &Quads, chunk: &PaddedChunk<MyBlock>) -> Vec<Vertex>
     for qf in QuadFace::ALL {
         for quad in quads.get(qf) {
             let vp = quad.voxel_position(qf);
-            let block = *chunk.get_padded(
-                vp.x as usize + PADDING,
-                vp.y as usize + PADDING,
-                vp.z as usize + PADDING,
-            );
+            let block = *chunk.get_padded(vp + glam::UVec3::splat(PADDING as u32));
 
             let n = qf.normal();
             let normal = Vec3::new(n.x, n.y, n.z);
