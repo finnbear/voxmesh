@@ -15,7 +15,7 @@ pub fn linearize(padded_pos: UVec3) -> usize {
 #[inline]
 pub fn delinearize(index: usize) -> UVec3 {
     let i = index as u32;
-    const P: u32 = PADDING as u32;
+    const P: u32 = PADDED as u32;
     UVec3::new(i % P, (i / P) % P, i / (P * P))
 }
 
