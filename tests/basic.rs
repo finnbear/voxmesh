@@ -6,7 +6,7 @@ use voxmesh::*;
 #[test]
 fn empty_chunk_produces_no_quads() {
     let chunk = PaddedChunk::new_filled(TestBlock::Air);
-    let q = greedy_mesh(&chunk);
+    let q = mesh_chunk(&chunk, true);
     assert_eq!(q.total(), 0);
 }
 
@@ -14,7 +14,7 @@ fn empty_chunk_produces_no_quads() {
 fn single_block_produces_six_faces() {
     let q = mesh_single(TestBlock::Stone);
     assert_eq!(q.total(), 6);
-    for face in Face::ALL {
+    for face in AlignedFace::ALL {
         assert_eq!(
             face_count(&q, face),
             1,
@@ -29,14 +29,14 @@ fn single_block_positions_are_unit_cube() {
     let q = mesh_single(TestBlock::Stone);
 
     // PosX face should be at x=1, spanning y=[0,1] and z=[0,1].
-    assert_face_on_plane(&q, Face::PosX, 0, 1.0);
-    let (y_min, y_max) = face_vertex_range(&q, Face::PosX, 1);
+    assert_face_on_plane(&q, AlignedFace::PosX, 0, 1.0);
+    let (y_min, y_max) = face_vertex_range(&q, AlignedFace::PosX, 1);
     assert!(y_min.abs() < 1e-6 && (y_max - 1.0).abs() < 1e-6);
-    let (z_min, z_max) = face_vertex_range(&q, Face::PosX, 2);
+    let (z_min, z_max) = face_vertex_range(&q, AlignedFace::PosX, 2);
     assert!(z_min.abs() < 1e-6 && (z_max - 1.0).abs() < 1e-6);
 
     // NegY face should be at y=0.
-    assert_face_on_plane(&q, Face::NegY, 1, 0.0);
+    assert_face_on_plane(&q, AlignedFace::NegY, 1, 0.0);
 }
 
 #[test]
@@ -73,6 +73,6 @@ fn blocks_only_in_padding_produce_no_quads() {
             }
         }
     }
-    let q = greedy_mesh(&chunk);
+    let q = mesh_chunk(&chunk, true);
     assert_eq!(q.total(), 0);
 }

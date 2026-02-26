@@ -7,7 +7,7 @@ use voxmesh::*;
 fn single_block_uvs_span_zero_to_one() {
     let q = mesh_single(TestBlock::Stone);
 
-    for face in Face::ALL {
+    for face in AlignedFace::ALL {
         let quad = &q.faces[face.index()][0];
         let uvs = quad.texture_coordinates(face, Axis::X, false);
         let u_min = uvs.iter().map(|v| v.x).fold(f32::INFINITY, f32::min);
@@ -30,9 +30,9 @@ fn merged_quad_uvs_scale_with_size() {
         (0, 0, 2, TestBlock::Stone),
     ]);
 
-    assert_eq!(face_count(&q, Face::PosY), 1);
-    let quad = &q.faces[Face::PosY.index()][0];
-    let uvs = quad.texture_coordinates(Face::PosY, Axis::Y, false);
+    assert_eq!(face_count(&q, AlignedFace::PosY), 1);
+    let quad = &q.faces[AlignedFace::PosY.index()][0];
+    let uvs = quad.texture_coordinates(AlignedFace::PosY, Axis::Y, false);
     let u_max = uvs.iter().map(|v| v.x).fold(f32::NEG_INFINITY, f32::max);
     assert!(
         (u_max - 3.0).abs() < 1e-6,

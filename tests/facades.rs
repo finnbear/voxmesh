@@ -7,8 +7,14 @@ use voxmesh::*;
 fn single_facade_produces_one_quad() {
     let q = mesh_single(TestBlock::Ladder);
     // Only the facade's own face (PosX) should have a quad.
-    assert_eq!(face_count(&q, Face::PosX), 1);
-    for face in [Face::NegX, Face::PosY, Face::NegY, Face::PosZ, Face::NegZ] {
+    assert_eq!(face_count(&q, AlignedFace::PosX), 1);
+    for face in [
+        AlignedFace::NegX,
+        AlignedFace::PosY,
+        AlignedFace::NegY,
+        AlignedFace::PosZ,
+        AlignedFace::NegZ,
+    ] {
         assert_eq!(face_count(&q, face), 0, "face {:?} should be empty", face);
     }
     // No diagonal quads.
@@ -21,21 +27,27 @@ fn single_facade_produces_one_quad() {
 #[test]
 fn facade_negy_produces_one_quad() {
     let q = mesh_single(TestBlock::Rail);
-    assert_eq!(face_count(&q, Face::NegY), 1);
-    for face in [Face::PosX, Face::NegX, Face::PosY, Face::PosZ, Face::NegZ] {
+    assert_eq!(face_count(&q, AlignedFace::NegY), 1);
+    for face in [
+        AlignedFace::PosX,
+        AlignedFace::NegX,
+        AlignedFace::PosY,
+        AlignedFace::PosZ,
+        AlignedFace::NegZ,
+    ] {
         assert_eq!(face_count(&q, face), 0, "face {:?} should be empty", face);
     }
     assert_eq!(q.total(), 1);
 }
 
 #[test]
-fn facade_block_faces_matches_greedy_mesh() {
+fn facade_mesh_block_matches_mesh_chunk() {
     let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
     chunk.set(glam::UVec3::ZERO, TestBlock::Ladder);
-    let from_chunk = greedy_mesh(&chunk);
-    let from_block = block_faces(&TestBlock::Ladder, ());
+    let from_chunk = mesh_chunk(&chunk, true);
+    let from_block = mesh_block(&TestBlock::Ladder, ());
     assert_eq!(from_chunk.total(), from_block.total());
-    for face in Face::ALL {
+    for face in AlignedFace::ALL {
         assert_eq!(
             from_chunk.faces[face.index()].len(),
             from_block.faces[face.index()].len(),
@@ -47,9 +59,9 @@ fn facade_block_faces_matches_greedy_mesh() {
 
 #[test]
 fn facade_posx_is_offset_from_face() {
-    let q = block_faces(&TestBlock::Ladder, ());
-    let quad = &q.faces[Face::PosX.index()][0];
-    let verts = quad.positions(Face::PosX, TestBlock::Ladder.shape());
+    let q = mesh_block(&TestBlock::Ladder, ());
+    let quad = &q.faces[AlignedFace::PosX.index()][0];
+    let verts = quad.positions(AlignedFace::PosX, TestBlock::Ladder.shape());
 
     // All vertices should have x = 15/16 (offset 1/16 inward from +X face).
     for (i, v) in verts.iter().enumerate() {
@@ -63,9 +75,9 @@ fn facade_posx_is_offset_from_face() {
 
 #[test]
 fn facade_negy_is_offset_from_face() {
-    let q = block_faces(&TestBlock::Rail, ());
-    let quad = &q.faces[Face::NegY.index()][0];
-    let verts = quad.positions(Face::NegY, TestBlock::Rail.shape());
+    let q = mesh_block(&TestBlock::Rail, ());
+    let quad = &q.faces[AlignedFace::NegY.index()][0];
+    let verts = quad.positions(AlignedFace::NegY, TestBlock::Rail.shape());
 
     // All vertices should have y = 1/16 (offset 1/16 inward from -Y face).
     for (i, v) in verts.iter().enumerate() {
@@ -82,8 +94,8 @@ fn facade_does_not_cull_neighbor() {
     // A stone block adjacent to a facade should still have all 6 faces.
     let q = mesh_with(&[(0, 0, 0, TestBlock::Ladder), (1, 0, 0, TestBlock::Stone)]);
     // Stone's NegX face (toward the facade) should still be present.
-    let stone_neg_x = q.faces[Face::NegX.index()].iter().any(|quad| {
-        let verts = quad.positions(Face::NegX, TestBlock::Ladder.shape());
+    let stone_neg_x = q.faces[AlignedFace::NegX.index()].iter().any(|quad| {
+        let verts = quad.positions(AlignedFace::NegX, TestBlock::Ladder.shape());
         (verts[0].x - 1.0).abs() < 1e-6
     });
     assert!(stone_neg_x, "stone NegX face should be present");
@@ -94,8 +106,8 @@ fn opaque_neighbor_does_not_cull_facade() {
     // An opaque block next to a facade should not cull it (facade is offset inward).
     let q = mesh_with(&[(0, 0, 0, TestBlock::Ladder), (1, 0, 0, TestBlock::Stone)]);
     // The ladder's PosX face should still be present.
-    let has_ladder = q.faces[Face::PosX.index()].iter().any(|quad| {
-        let verts = quad.positions(Face::PosX, TestBlock::Ladder.shape());
+    let has_ladder = q.faces[AlignedFace::PosX.index()].iter().any(|quad| {
+        let verts = quad.positions(AlignedFace::PosX, TestBlock::Ladder.shape());
         (verts[0].x - 15.0 / 16.0).abs() < 1e-6
     });
     assert!(has_ladder, "ladder PosX facade should be present");
@@ -110,7 +122,7 @@ fn identical_facades_merge_along_v() {
         (0, 2, 0, TestBlock::Ladder),
     ]);
     assert_eq!(
-        face_count(&q, Face::PosX),
+        face_count(&q, AlignedFace::PosX),
         1,
         "stacked facades should merge into 1 quad"
     );
@@ -125,7 +137,7 @@ fn identical_facades_merge_along_u() {
         (0, 0, 2, TestBlock::Ladder),
     ]);
     assert_eq!(
-        face_count(&q, Face::PosX),
+        face_count(&q, AlignedFace::PosX),
         1,
         "row of facades should merge into 1 quad"
     );
@@ -135,29 +147,29 @@ fn identical_facades_merge_along_u() {
 fn different_face_facades_do_not_merge() {
     // A PosX facade next to a NegY facade should not merge (different face lists).
     let q = mesh_with(&[(0, 0, 0, TestBlock::Ladder), (0, 0, 1, TestBlock::Rail)]);
-    assert_eq!(face_count(&q, Face::PosX), 1);
-    assert_eq!(face_count(&q, Face::NegY), 1);
+    assert_eq!(face_count(&q, AlignedFace::PosX), 1);
+    assert_eq!(face_count(&q, AlignedFace::NegY), 1);
     assert_eq!(q.total(), 2);
 }
 
 #[test]
 fn facade_voxel_position_is_correct() {
     let q = mesh_single(TestBlock::Ladder);
-    let quad = &q.faces[Face::PosX.index()][0];
-    let vp = quad.voxel_position(Face::PosX);
+    let quad = &q.faces[AlignedFace::PosX.index()][0];
+    let vp = quad.voxel_position(AlignedFace::PosX);
     assert_eq!(vp, glam::UVec3::ZERO);
 
     let q = mesh_single(TestBlock::Rail);
-    let quad = &q.faces[Face::NegY.index()][0];
-    let vp = quad.voxel_position(Face::NegY);
+    let quad = &q.faces[AlignedFace::NegY.index()][0];
+    let vp = quad.voxel_position(AlignedFace::NegY);
     assert_eq!(vp, glam::UVec3::ZERO);
 }
 
 #[test]
 fn facade_texture_coordinates_span_one() {
-    let q = block_faces(&TestBlock::Ladder, ());
-    let quad = &q.faces[Face::PosX.index()][0];
-    let uvs = quad.texture_coordinates(Face::PosX, Axis::X, false);
+    let q = mesh_block(&TestBlock::Ladder, ());
+    let quad = &q.faces[AlignedFace::PosX.index()][0];
+    let uvs = quad.texture_coordinates(AlignedFace::PosX, Axis::X, false);
 
     let u_min = uvs.iter().map(|uv| uv.x).fold(f32::INFINITY, f32::min);
     let u_max = uvs.iter().map(|uv| uv.x).fold(f32::NEG_INFINITY, f32::max);

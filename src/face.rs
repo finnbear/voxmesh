@@ -2,6 +2,7 @@ use glam::{IVec3, Vec3};
 
 use crate::block::{CrossInfo, Shape};
 
+/// One of the three spatial axes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Axis {
@@ -17,9 +18,10 @@ impl Axis {
     }
 }
 
+/// One of the six axis-aligned cube faces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-pub enum Face {
+pub enum AlignedFace {
     PosX,
     NegX,
     PosY,
@@ -28,51 +30,54 @@ pub enum Face {
     NegZ,
 }
 
-impl Face {
+impl AlignedFace {
     #[inline]
     pub fn index(self) -> usize {
         self as u8 as usize
     }
 
     #[inline]
-    pub fn opposite(self) -> Face {
+    pub fn opposite(self) -> AlignedFace {
         match self {
-            Face::PosX => Face::NegX,
-            Face::NegX => Face::PosX,
-            Face::PosY => Face::NegY,
-            Face::NegY => Face::PosY,
-            Face::PosZ => Face::NegZ,
-            Face::NegZ => Face::PosZ,
+            AlignedFace::PosX => AlignedFace::NegX,
+            AlignedFace::NegX => AlignedFace::PosX,
+            AlignedFace::PosY => AlignedFace::NegY,
+            AlignedFace::NegY => AlignedFace::PosY,
+            AlignedFace::PosZ => AlignedFace::NegZ,
+            AlignedFace::NegZ => AlignedFace::PosZ,
         }
     }
 
     #[inline]
     pub fn axis(self) -> Axis {
         match self {
-            Face::PosX | Face::NegX => Axis::X,
-            Face::PosY | Face::NegY => Axis::Y,
-            Face::PosZ | Face::NegZ => Axis::Z,
+            AlignedFace::PosX | AlignedFace::NegX => Axis::X,
+            AlignedFace::PosY | AlignedFace::NegY => Axis::Y,
+            AlignedFace::PosZ | AlignedFace::NegZ => Axis::Z,
         }
     }
 
     #[inline]
     pub fn is_positive(self) -> bool {
-        matches!(self, Face::PosX | Face::PosY | Face::PosZ)
+        matches!(
+            self,
+            AlignedFace::PosX | AlignedFace::PosY | AlignedFace::PosZ
+        )
     }
 
     #[inline]
     pub fn normal(self) -> IVec3 {
         match self {
-            Face::PosX => IVec3::new(1, 0, 0),
-            Face::NegX => IVec3::new(-1, 0, 0),
-            Face::PosY => IVec3::new(0, 1, 0),
-            Face::NegY => IVec3::new(0, -1, 0),
-            Face::PosZ => IVec3::new(0, 0, 1),
-            Face::NegZ => IVec3::new(0, 0, -1),
+            AlignedFace::PosX => IVec3::new(1, 0, 0),
+            AlignedFace::NegX => IVec3::new(-1, 0, 0),
+            AlignedFace::PosY => IVec3::new(0, 1, 0),
+            AlignedFace::NegY => IVec3::new(0, -1, 0),
+            AlignedFace::PosZ => IVec3::new(0, 0, 1),
+            AlignedFace::NegZ => IVec3::new(0, 0, -1),
         }
     }
 
-    /// Whether the tangent cross product `u x v` (from [`face_tangents`])
+    /// Whether the tangent cross product `u x v`
     /// aligns with the outward normal. When true, the vertex order
     /// `[base, base+du, base+du+dv, base+dv]` is already CCW. When false,
     /// the offsets must be swapped.
@@ -82,40 +87,40 @@ impl Face {
         self.is_positive() != (self.axis() == Axis::X)
     }
 
-    pub const ALL: [Face; 6] = [
-        Face::PosX,
-        Face::NegX,
-        Face::PosY,
-        Face::NegY,
-        Face::PosZ,
-        Face::NegZ,
+    pub const ALL: [AlignedFace; 6] = [
+        AlignedFace::PosX,
+        AlignedFace::NegX,
+        AlignedFace::PosY,
+        AlignedFace::NegY,
+        AlignedFace::PosZ,
+        AlignedFace::NegZ,
     ];
 }
 
-/// A face that a quad can belong to: either an axis-aligned [`Face`] or a
-/// [`DiagonalFace`].
+/// A face that a quad can belong to: either an axis-aligned
+/// [`AlignedFace`] or a [`DiagonalFace`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QuadFace {
-    Aligned(Face),
+pub enum Face {
+    Aligned(AlignedFace),
     Diagonal(DiagonalFace),
 }
 
-impl QuadFace {
-    pub const ALL: [QuadFace; 8] = [
-        QuadFace::Aligned(Face::PosX),
-        QuadFace::Aligned(Face::NegX),
-        QuadFace::Aligned(Face::PosY),
-        QuadFace::Aligned(Face::NegY),
-        QuadFace::Aligned(Face::PosZ),
-        QuadFace::Aligned(Face::NegZ),
-        QuadFace::Diagonal(DiagonalFace::A),
-        QuadFace::Diagonal(DiagonalFace::B),
+impl Face {
+    pub const ALL: [Face; 8] = [
+        Face::Aligned(AlignedFace::PosX),
+        Face::Aligned(AlignedFace::NegX),
+        Face::Aligned(AlignedFace::PosY),
+        Face::Aligned(AlignedFace::NegY),
+        Face::Aligned(AlignedFace::PosZ),
+        Face::Aligned(AlignedFace::NegZ),
+        Face::Diagonal(DiagonalFace::A),
+        Face::Diagonal(DiagonalFace::B),
     ];
 
     /// Whether this face requires two-sided rendering (no backface culling).
     #[inline]
     pub fn is_diagonal(self) -> bool {
-        matches!(self, QuadFace::Diagonal(_))
+        matches!(self, Face::Diagonal(_))
     }
 
     /// Returns the unit outward normal for this face.
@@ -129,12 +134,12 @@ impl QuadFace {
     #[inline]
     pub fn normal(self, shape: Shape) -> Vec3 {
         match self {
-            QuadFace::Aligned(f) => f.normal().as_vec3(),
-            QuadFace::Diagonal(d) => {
+            Face::Aligned(f) => f.normal().as_vec3(),
+            Face::Diagonal(d) => {
                 let info = match shape {
                     Shape::Cross(info) => info,
                     _ => CrossInfo {
-                        face: Face::NegY,
+                        face: AlignedFace::NegY,
                         stretch: 0,
                     },
                 };
@@ -157,17 +162,17 @@ impl QuadFace {
     }
 }
 
-impl From<Face> for QuadFace {
+impl From<AlignedFace> for Face {
     #[inline]
-    fn from(f: Face) -> Self {
-        QuadFace::Aligned(f)
+    fn from(f: AlignedFace) -> Self {
+        Face::Aligned(f)
     }
 }
 
-impl From<DiagonalFace> for QuadFace {
+impl From<DiagonalFace> for Face {
     #[inline]
     fn from(d: DiagonalFace) -> Self {
-        QuadFace::Diagonal(d)
+        Face::Diagonal(d)
     }
 }
 

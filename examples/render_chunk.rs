@@ -1,4 +1,4 @@
-//! Software-renders a greedy-meshed voxel chunk using `euc` and writes the
+//! Software-renders a meshed voxel chunk using `euc` and writes the
 //! result to `examples/render_chunk.png`.
 //!
 //! Demonstrates per-vertex ambient occlusion and smooth lighting with
@@ -75,30 +75,30 @@ impl Block for LitBlock {
     fn shape(&self) -> Shape {
         match self.block {
             MyBlock::CobbleSlab => Shape::Slab(SlabInfo {
-                face: Face::NegY,
+                face: AlignedFace::NegY,
                 thickness: 8,
             }),
             MyBlock::SugarCane | MyBlock::Shrub => Shape::Cross(CrossInfo {
-                face: Face::NegY,
+                face: AlignedFace::NegY,
                 stretch: 0,
             }),
             MyBlock::Cobweb => Shape::Cross(CrossInfo {
-                face: Face::NegY,
+                face: AlignedFace::NegY,
                 stretch: 4,
             }),
-            MyBlock::Ladder => Shape::Facade(Face::PosX),
-            MyBlock::Rail => Shape::Facade(Face::NegY),
+            MyBlock::Ladder => Shape::Facade(AlignedFace::PosX),
+            MyBlock::Rail => Shape::Facade(AlignedFace::NegY),
             MyBlock::Cactus => Shape::Inset(1),
             MyBlock::ChainY => Shape::Cross(CrossInfo {
-                face: Face::NegY,
+                face: AlignedFace::NegY,
                 stretch: 0,
             }),
             MyBlock::ChainX => Shape::Cross(CrossInfo {
-                face: Face::PosX,
+                face: AlignedFace::PosX,
                 stretch: 0,
             }),
             MyBlock::ChainZ => Shape::Cross(CrossInfo {
-                face: Face::PosZ,
+                face: AlignedFace::PosZ,
                 stretch: 0,
             }),
             _ => Shape::WholeBlock,
@@ -224,7 +224,7 @@ fn build_atlas() -> Buffer2d<Rgba<f32>> {
 }
 
 /// Returns the U offset (0..N) into the atlas strip for a given block/face.
-fn atlas_u_offset(block: MyBlock, face: QuadFace) -> f32 {
+fn atlas_u_offset(block: MyBlock, face: Face) -> f32 {
     match block {
         MyBlock::Cobblestone | MyBlock::CobbleSlab => 0.0,
         MyBlock::Clay => 1.0,
@@ -237,8 +237,8 @@ fn atlas_u_offset(block: MyBlock, face: QuadFace) -> f32 {
         MyBlock::Rail => 8.0,
         MyBlock::Debug => 9.0,
         MyBlock::Cactus => match face {
-            QuadFace::Aligned(Face::PosY) => 11.0,
-            QuadFace::Aligned(Face::NegY) => 12.0,
+            Face::Aligned(AlignedFace::PosY) => 11.0,
+            Face::Aligned(AlignedFace::NegY) => 12.0,
             _ => 10.0,
         },
         MyBlock::ChainY | MyBlock::ChainX | MyBlock::ChainZ => 13.0,
@@ -524,7 +524,7 @@ fn build_chunk() -> PaddedChunk<LitBlock> {
 fn quads_to_vertices(quads: &Quads<u8>, chunk: &PaddedChunk<LitBlock>) -> Vec<Vertex> {
     let mut verts = Vec::new();
 
-    for qf in QuadFace::ALL {
+    for qf in Face::ALL {
         for quad in quads.get(qf) {
             let vp = quad.voxel_position(qf);
             let lit_block = *chunk.get_padded(vp + glam::UVec3::splat(PADDING as u32));
@@ -567,10 +567,10 @@ fn main() {
 
     let atlas = build_atlas();
     let chunk = build_chunk();
-    let quads = greedy_mesh(&chunk);
+    let quads = mesh_chunk(&chunk, true);
 
     println!(
-        "Greedy mesh produced {} quads ({} triangles)",
+        "Mesh produced {} quads ({} triangles)",
         quads.total(),
         quads.total() * 2,
     );

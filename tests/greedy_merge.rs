@@ -11,8 +11,8 @@ fn flat_layer_merges_into_one_quad_per_face() {
             chunk.set(glam::UVec3::new(x, 0, z), TestBlock::Stone);
         }
     }
-    let q = greedy_mesh(&chunk);
-    for face in Face::ALL {
+    let q = mesh_chunk(&chunk, true);
+    for face in AlignedFace::ALL {
         assert_eq!(face_count(&q, face), 1, "face {:?}", face);
     }
     assert_eq!(q.total(), 6);
@@ -26,8 +26,8 @@ fn flat_slab_layer_merges_into_one_quad_per_face() {
             chunk.set(glam::UVec3::new(x, 0, z), TestBlock::LowerSlab);
         }
     }
-    let q = greedy_mesh(&chunk);
-    for face in Face::ALL {
+    let q = mesh_chunk(&chunk, true);
+    for face in AlignedFace::ALL {
         assert_eq!(face_count(&q, face), 1, "face {:?}", face);
     }
     assert_eq!(q.total(), 6);
@@ -43,9 +43,9 @@ fn full_chunk_same_block_produces_six_quads() {
             }
         }
     }
-    let q = greedy_mesh(&chunk);
+    let q = mesh_chunk(&chunk, true);
     assert_eq!(q.total(), 6);
-    for face in Face::ALL {
+    for face in AlignedFace::ALL {
         assert_eq!(face_count(&q, face), 1, "face {:?}", face);
     }
 }
@@ -60,7 +60,7 @@ fn checkerboard_produces_many_quads() {
             }
         }
     }
-    let q = greedy_mesh(&chunk);
+    let q = mesh_chunk(&chunk, true);
     let block_count = (CHUNK_SIZE * CHUNK_SIZE + 1) / 2; // 128
     assert_eq!(q.total(), block_count * 6);
 }

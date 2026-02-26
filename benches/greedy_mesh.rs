@@ -8,7 +8,7 @@ use block_mesh::{
     greedy_quads, GreedyQuadsBuffer, MergeVoxel, Voxel, VoxelVisibility, RIGHT_HANDED_Y_UP_CONFIG,
 };
 use ndshape::{ConstShape, ConstShape3u32};
-use voxmesh::{greedy_mesh_into, *};
+use voxmesh::{mesh_chunk_into, *};
 
 // voxmesh block type
 
@@ -196,7 +196,7 @@ fn bench_block_mesh_vertices(b: &mut Bencher, voxels: &[BmVoxel; BmPaddedShape::
 fn bench_voxmesh(b: &mut Bencher, chunk: &PaddedChunk<VmBlock>) {
     let mut quads = Quads::new();
     b.iter(|| {
-        greedy_mesh_into(test::black_box(chunk), &mut quads);
+        mesh_chunk_into(test::black_box(chunk), true, &mut quads);
         test::black_box(&quads);
     });
 }
@@ -204,8 +204,8 @@ fn bench_voxmesh(b: &mut Bencher, chunk: &PaddedChunk<VmBlock>) {
 fn bench_voxmesh_vertices(b: &mut Bencher, chunk: &PaddedChunk<VmBlock>) {
     let mut quads = Quads::new();
     b.iter(|| {
-        greedy_mesh_into(test::black_box(chunk), &mut quads);
-        for qf in QuadFace::ALL {
+        mesh_chunk_into(test::black_box(chunk), true, &mut quads);
+        for qf in Face::ALL {
             for quad in quads.get(qf) {
                 let positions = quad.positions(qf, Shape::WholeBlock);
                 let uvs = quad.texture_coordinates(qf, Axis::X, false);

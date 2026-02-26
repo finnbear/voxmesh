@@ -35,16 +35,16 @@ impl MergeVoxel for BmVoxel {
 
 type PaddedShape = ConstShape3u32<18, 18, 18>;
 
-/// Maps a block-mesh face index to a voxmesh `Face`.
+/// Maps a block-mesh face index to a voxmesh `AlignedFace`.
 /// block-mesh RIGHT_HANDED_Y_UP_CONFIG order: -X, -Y, -Z, +X, +Y, +Z.
-fn bm_face_index_to_face(i: usize) -> Face {
+fn bm_face_index_to_face(i: usize) -> AlignedFace {
     match i {
-        0 => Face::NegX,
-        1 => Face::NegY,
-        2 => Face::NegZ,
-        3 => Face::PosX,
-        4 => Face::PosY,
-        5 => Face::PosZ,
+        0 => AlignedFace::NegX,
+        1 => AlignedFace::NegY,
+        2 => AlignedFace::NegZ,
+        3 => AlignedFace::PosX,
+        4 => AlignedFace::PosY,
+        5 => AlignedFace::PosZ,
         _ => unreachable!(),
     }
 }

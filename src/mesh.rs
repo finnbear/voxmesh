@@ -2,9 +2,10 @@ use glam::{UVec2, UVec3, Vec2, Vec3};
 
 use crate::block::{Block, CrossInfo, CullMode, Shape, FULL_THICKNESS};
 use crate::chunk::{PaddedChunk, CHUNK_SIZE, PADDED, PADDING};
-use crate::face::{Axis, DiagonalFace, Face, QuadFace};
+use crate::face::{AlignedFace, Axis, DiagonalFace, Face};
 use crate::light::Light;
 
+/// A single output quad from the mesher, with per-vertex AO and light.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Quad<L: Light = ()> {
     /// Position of the lowest-coordinate corner in 1/16ths of a block,
@@ -23,11 +24,11 @@ pub struct Quad<L: Light = ()> {
 /// Returns the (u, v) tangent vectors for a face.
 /// u corresponds to `size.x`, v corresponds to `size.y`.
 /// Matches the block-mesh axis permutation convention (Xzy, Yzx, Zxy).
-fn face_tangents(face: Face) -> (Vec3, Vec3) {
+fn face_tangents(face: AlignedFace) -> (Vec3, Vec3) {
     match face {
-        Face::PosX | Face::NegX => (Vec3::Z, Vec3::Y),
-        Face::PosY | Face::NegY => (Vec3::Z, Vec3::X),
-        Face::PosZ | Face::NegZ => (Vec3::X, Vec3::Y),
+        AlignedFace::PosX | AlignedFace::NegX => (Vec3::Z, Vec3::Y),
+        AlignedFace::PosY | AlignedFace::NegY => (Vec3::Z, Vec3::X),
+        AlignedFace::PosZ | AlignedFace::NegZ => (Vec3::X, Vec3::Y),
     }
 }
 
@@ -37,13 +38,13 @@ impl<L: Light> Quad<L> {
     /// in a chunk or flat voxel array.
     ///
     /// `face` must match the face under which this quad was generated: an
-    /// axis-aligned [`Face`] for quads from [`Quads::faces`], or a
+    /// [`AlignedFace`] for quads from [`Quads::faces`], or a
     /// [`DiagonalFace`] for quads from [`Quads::diagonals`].
-    pub fn voxel_position(&self, face: impl Into<QuadFace>) -> UVec3 {
+    pub fn voxel_position(&self, face: impl Into<Face>) -> UVec3 {
         let ft = FULL_THICKNESS;
         let pad = PADDING as u32;
         match face.into() {
-            QuadFace::Aligned(f) => {
+            Face::Aligned(f) => {
                 let (normal_idx, _, _) = face_axis_indices(f);
                 let mut result = UVec3::ZERO;
                 for axis in 0..3 {
@@ -57,7 +58,7 @@ impl<L: Light> Quad<L> {
                 }
                 result
             }
-            QuadFace::Diagonal(_) => UVec3::new(
+            Face::Diagonal(_) => UVec3::new(
                 self.origin_padded.x / ft - pad,
                 self.origin_padded.y / ft - pad,
                 self.origin_padded.z / ft - pad,
@@ -71,9 +72,9 @@ impl<L: Light> Quad<L> {
     /// For diagonal ([`Shape::Cross`]) faces, the shape's [`CrossInfo`]
     /// determines the stretch and orientation. For axis-aligned faces,
     /// the shape is ignored.
-    pub fn positions(&self, face: impl Into<QuadFace>, shape: Shape) -> [Vec3; 4] {
+    pub fn positions(&self, face: impl Into<Face>, shape: Shape) -> [Vec3; 4] {
         match face.into() {
-            QuadFace::Aligned(face) => {
+            Face::Aligned(face) => {
                 let scale = 1.0 / FULL_THICKNESS as f32;
                 let pad = PADDING as f32;
                 let base = Vec3::new(
@@ -95,11 +96,11 @@ impl<L: Light> Quad<L> {
                     [base, base + dv, base + dv + du, base + du]
                 }
             }
-            QuadFace::Diagonal(diag) => {
+            Face::Diagonal(diag) => {
                 let info = match shape {
                     Shape::Cross(info) => info,
                     _ => CrossInfo {
-                        face: Face::NegY,
+                        face: AlignedFace::NegY,
                         stretch: 0,
                     },
                 };
@@ -165,12 +166,12 @@ impl<L: Light> Quad<L> {
     /// faces and are ignored for diagonal faces.
     pub fn texture_coordinates(
         &self,
-        face: impl Into<QuadFace>,
+        face: impl Into<Face>,
         u_flip_face: Axis,
         flip_v: bool,
     ) -> [Vec2; 4] {
         match face.into() {
-            QuadFace::Aligned(face) => {
+            Face::Aligned(face) => {
                 let scale = 1.0 / FULL_THICKNESS as f32;
                 let u_size = self.size.x as f32 * scale;
                 let v_size = self.size.y as f32 * scale;
@@ -204,7 +205,7 @@ impl<L: Light> Quad<L> {
                     )
                 })
             }
-            QuadFace::Diagonal(_) => {
+            Face::Diagonal(_) => {
                 let v_size = self.size.y as f32 * (1.0 / FULL_THICKNESS as f32);
                 let (v_lo, v_hi) = if flip_v { (v_size, 0.0) } else { (0.0, v_size) };
                 [
@@ -247,9 +248,11 @@ impl<L: Light> Quad<L> {
     }
 }
 
+/// Output of the mesher: quads grouped by face direction.
 pub struct Quads<L: Light = ()> {
+    /// Axis-aligned quads indexed by [`AlignedFace`].
     pub faces: [Vec<Quad<L>>; 6],
-    /// Diagonal quads for X-shaped billboard blocks, indexed by [`DiagonalFace`].
+    /// Diagonal quads for X-shaped cross blocks, indexed by [`DiagonalFace`].
     pub diagonals: [Vec<Quad<L>>; 2],
 }
 
@@ -289,11 +292,11 @@ fn cross_axes(axis: Axis) -> (usize, usize) {
 
 /// Returns the (normal_idx, u_idx, v_idx) axis indices for a face, matching
 /// the tangent convention in [`face_tangents`].
-fn face_axis_indices(face: Face) -> (usize, usize, usize) {
+fn face_axis_indices(face: AlignedFace) -> (usize, usize, usize) {
     match face {
-        Face::PosX | Face::NegX => (0, 2, 1), // normal=X, u=Z, v=Y
-        Face::PosY | Face::NegY => (1, 2, 0), // normal=Y, u=Z, v=X
-        Face::PosZ | Face::NegZ => (2, 0, 1), // normal=Z, u=X, v=Y
+        AlignedFace::PosX | AlignedFace::NegX => (0, 2, 1), // normal=X, u=Z, v=Y
+        AlignedFace::PosY | AlignedFace::NegY => (1, 2, 0), // normal=Y, u=Z, v=X
+        AlignedFace::PosZ | AlignedFace::NegZ => (2, 0, 1), // normal=Z, u=X, v=Y
     }
 }
 
@@ -301,7 +304,7 @@ fn face_axis_indices(face: Face) -> (usize, usize, usize) {
 /// shared boundary. For whole-blocks this is trivial. For slabs, checks
 /// whether the neighbor occupies at least the same sub-region along the
 /// slab axis.
-fn neighbor_covers_face_region<B: Block>(block: &B, neighbor: &B, face: Face) -> bool {
+fn neighbor_covers_face_region<B: Block>(block: &B, neighbor: &B, face: AlignedFace) -> bool {
     match neighbor.shape() {
         Shape::WholeBlock => true,
         // Cross and facade blocks never cover any face region.
@@ -330,7 +333,7 @@ fn neighbor_covers_face_region<B: Block>(block: &B, neighbor: &B, face: Face) ->
 
 /// Whether the current block's face is culled by the given neighbor.
 /// Only valid for faces at the block boundary (flush or side).
-fn is_culled_at_boundary<B: Block>(block: &B, neighbor: &B, face: Face) -> bool {
+fn is_culled_at_boundary<B: Block>(block: &B, neighbor: &B, face: AlignedFace) -> bool {
     if !neighbor_covers_face_region(block, neighbor, face) {
         return false;
     }
@@ -350,7 +353,7 @@ fn is_culled_at_boundary<B: Block>(block: &B, neighbor: &B, face: Face) -> bool 
 #[inline]
 fn mask_entry_for_shape<B: Block>(
     block: &B,
-    face: Face,
+    face: AlignedFace,
     u_idx: usize,
     v_idx: usize,
 ) -> Option<MaskEntry<B>> {
@@ -470,7 +473,7 @@ fn mask_entry_for_shape<B: Block>(
 fn compute_slab_mask_entry<B: Block>(
     block: &B,
     neighbor: &B,
-    face: Face,
+    face: AlignedFace,
     u_idx: usize,
     v_idx: usize,
 ) -> Option<MaskEntry<B>> {
@@ -497,7 +500,7 @@ fn compute_slab_mask_entry<B: Block>(
 /// Whether a block's shape fills the given face (whole blocks always,
 /// slabs only on their flush face, others never).
 #[inline]
-fn shape_fills_face<B: Block>(block: &B, face: Face) -> bool {
+fn shape_fills_face<B: Block>(block: &B, face: AlignedFace) -> bool {
     match block.shape() {
         Shape::WholeBlock => true,
         Shape::Slab(info) => info.face == face,
@@ -508,14 +511,14 @@ fn shape_fills_face<B: Block>(block: &B, face: Face) -> bool {
 /// Whether a block occludes AO on the given face: material is
 /// AO-opaque and shape fills that face.
 #[inline]
-fn shape_ao_opaque<B: Block>(block: &B, face: Face) -> bool {
+fn shape_ao_opaque<B: Block>(block: &B, face: AlignedFace) -> bool {
     block.ao_opaque() && shape_fills_face(block, face)
 }
 
 /// Whether a block blocks light passage on the given face: material is
 /// fully opaque and shape fills that face.
 #[inline]
-fn shape_light_opaque<B: Block>(block: &B, face: Face) -> bool {
+fn shape_light_opaque<B: Block>(block: &B, face: AlignedFace) -> bool {
     matches!(block.cull_mode(), CullMode::Opaque) && shape_fills_face(block, face)
 }
 
@@ -534,7 +537,7 @@ fn compute_ao_light<B: Block>(
     n_idx: usize,
     u_stride: isize,
     v_stride: isize,
-    face: Face,
+    face: AlignedFace,
 ) -> ([u8; 4], [<B::Light as Light>::Average; 4]) {
     // All neighbors are in the plane one step along the face normal.
     // The face of each neighbor facing toward the lit surface is
@@ -676,22 +679,22 @@ impl<L: Light> Quads<L> {
             + self.diagonals.iter().map(|v| v.len()).sum::<usize>()
     }
 
-    /// Returns the quad list for the given [`QuadFace`].
+    /// Returns the quad list for the given [`Face`].
     ///
-    /// This allows iterating all faces uniformly via [`QuadFace::ALL`]:
+    /// This allows iterating all faces uniformly via [`Face::ALL`]:
     ///
     /// ```ignore
-    /// for qf in QuadFace::ALL {
+    /// for qf in Face::ALL {
     ///     for quad in quads.get(qf) {
     ///         let vp = quad.voxel_position(qf);
     ///         // ...
     ///     }
     /// }
     /// ```
-    pub fn get(&self, face: QuadFace) -> &[Quad<L>] {
+    pub fn get(&self, face: Face) -> &[Quad<L>] {
         match face {
-            QuadFace::Aligned(f) => &self.faces[f.index()],
-            QuadFace::Diagonal(d) => &self.diagonals[d.index()],
+            Face::Aligned(f) => &self.faces[f.index()],
+            Face::Diagonal(d) => &self.diagonals[d.index()],
         }
     }
 }
@@ -702,9 +705,13 @@ impl<L: Light> Default for Quads<L> {
     }
 }
 
-pub fn greedy_mesh<B: Block>(chunk: &PaddedChunk<B>) -> Quads<B::Light> {
+/// Meshes a padded chunk, returning the generated quads.
+///
+/// When `greedy` is true, coplanar identical faces are merged into
+/// larger quads (fewer draw calls, but hides per-block boundaries).
+pub fn mesh_chunk<B: Block>(chunk: &PaddedChunk<B>, greedy: bool) -> Quads<B::Light> {
     let mut quads = Quads::new();
-    greedy_mesh_into(chunk, &mut quads);
+    mesh_chunk_into(chunk, greedy, &mut quads);
     quads
 }
 
@@ -712,13 +719,13 @@ pub fn greedy_mesh<B: Block>(chunk: &PaddedChunk<B>) -> Quads<B::Light> {
 /// the padded chunk array, matching the tangent convention in
 /// [`face_tangents`].
 #[inline]
-fn face_strides(face: Face) -> (usize, usize, usize) {
+fn face_strides(face: AlignedFace) -> (usize, usize, usize) {
     const P: usize = PADDED;
     const P2: usize = PADDED * PADDED;
     match face {
-        Face::PosX | Face::NegX => (1, P2, P), // normal=X, u=Z, v=Y
-        Face::PosY | Face::NegY => (P, P2, 1), // normal=Y, u=Z, v=X
-        Face::PosZ | Face::NegZ => (P2, 1, P), // normal=Z, u=X, v=Y
+        AlignedFace::PosX | AlignedFace::NegX => (1, P2, P), // normal=X, u=Z, v=Y
+        AlignedFace::PosY | AlignedFace::NegY => (P, P2, 1), // normal=Y, u=Z, v=X
+        AlignedFace::PosZ | AlignedFace::NegZ => (P2, 1, P), // normal=Z, u=X, v=Y
     }
 }
 
@@ -742,7 +749,7 @@ fn emit_quad<B: Block>(
     v_block: u32,
     width: u32,
     height: u32,
-    face: Face,
+    face: AlignedFace,
 ) -> Quad<B::Light> {
     let ft32 = FULL_THICKNESS;
     let mut origin = [0u32; 3];
@@ -792,7 +799,7 @@ fn emit_quad<B: Block>(
 fn emit_cross_quads<B: Block>(
     quads: &mut Quads<B::Light>,
     block_pos: [u32; 3],
-    root_face: Face,
+    root_face: AlignedFace,
     merge_len: u32,
     light_bottom: <B::Light as Light>::Average,
     light_top: <B::Light as Light>::Average,
@@ -822,23 +829,18 @@ fn emit_cross_quads<B: Block>(
     }
 }
 
-/// Produces quads for a single block at the origin with all faces
-/// exposed (no neighbor culling). Useful for rendering held items or
-/// dropped block entities.
+/// Meshes a single block with all faces exposed (no neighbor culling).
 ///
-/// The resulting [`Quad`] positions span [0, 1] (or the appropriate
-/// sub-range for slabs), the same coordinate space as a block at
-/// (0,0,0) in a chunk.
-pub fn block_faces<B: Block>(block: &B, light: <B::Light as Light>::Average) -> Quads<B::Light> {
+/// `light` is applied uniformly to all vertices; AO is disabled.
+/// Useful for rendering held items or dropped block entities.
+pub fn mesh_block<B: Block>(block: &B, light: <B::Light as Light>::Average) -> Quads<B::Light> {
     let mut quads = Quads::new();
-    block_faces_into(block, light, &mut quads);
+    mesh_block_into(block, light, &mut quads);
     quads
 }
 
-/// Like [`block_faces`], but reuses an existing [`Quads`] buffer.
-///
-/// `light` is applied uniformly to all vertices. AO is disabled.
-pub fn block_faces_into<B: Block>(
+/// Like [`mesh_block`], but reuses an existing [`Quads`] buffer.
+pub fn mesh_block_into<B: Block>(
     block: &B,
     light: <B::Light as Light>::Average,
     quads: &mut Quads<B::Light>,
@@ -857,7 +859,7 @@ pub fn block_faces_into<B: Block>(
         return;
     }
 
-    for face in Face::ALL {
+    for face in AlignedFace::ALL {
         let (normal_idx, u_idx, v_idx) = face_axis_indices(face);
 
         if let Some(mut entry) = mask_entry_for_shape(block, face, u_idx, v_idx) {
@@ -879,11 +881,15 @@ pub fn block_faces_into<B: Block>(
     }
 }
 
-/// Like [`greedy_mesh`] but reuses an existing [`Quads`] buffer.
+/// Like [`mesh_chunk`], but reuses an existing [`Quads`] buffer.
 ///
 /// The buffer is [`reset`](Quads::reset) before meshing, so previous
 /// contents are cleared but backing allocations are preserved.
-pub fn greedy_mesh_into<B: Block>(chunk: &PaddedChunk<B>, quads: &mut Quads<B::Light>) {
+pub fn mesh_chunk_into<B: Block>(
+    chunk: &PaddedChunk<B>,
+    greedy: bool,
+    quads: &mut Quads<B::Light>,
+) {
     quads.reset();
     let ft = FULL_THICKNESS as u8;
     let data = &chunk.data;
@@ -893,7 +899,7 @@ pub fn greedy_mesh_into<B: Block>(chunk: &PaddedChunk<B>, quads: &mut Quads<B::L
     let mut mask: [[Option<MaskEntry<B>>; CHUNK_SIZE]; CHUNK_SIZE] =
         [[None; CHUNK_SIZE]; CHUNK_SIZE];
 
-    for face in Face::ALL {
+    for face in AlignedFace::ALL {
         let (normal_idx, u_idx, v_idx) = face_axis_indices(face);
         let (n_stride, u_stride, v_stride) = face_strides(face);
         let neighbor_stride: isize = if face.is_positive() {
@@ -993,7 +999,7 @@ pub fn greedy_mesh_into<B: Block>(chunk: &PaddedChunk<B>, quads: &mut Quads<B::L
                 v_base += v_stride;
             }
 
-            // Greedy merge phase.
+            // Emit phase (with optional greedy merging).
             for v in 0..CHUNK_SIZE {
                 let mut u = 0;
                 while u < CHUNK_SIZE {
@@ -1005,26 +1011,29 @@ pub fn greedy_mesh_into<B: Block>(chunk: &PaddedChunk<B>, quads: &mut Quads<B::L
                         }
                     };
 
-                    // Find widest run of identical entries along u.
-                    // Sub-block u extents (slabs) must not merge along u.
                     let mut width = 1;
-                    if entry.u_intra_extent == ft {
-                        while u + width < CHUNK_SIZE && mask[v][u + width] == Some(entry) {
-                            width += 1;
-                        }
-                    }
-
-                    // Extend the run along v.
-                    // Sub-block v extents (slabs) must not merge along v.
                     let mut height = 1;
-                    if entry.v_intra_extent == ft {
-                        'extend: while v + height < CHUNK_SIZE {
-                            for du in 0..width {
-                                if mask[v + height][u + du] != Some(entry) {
-                                    break 'extend;
-                                }
+
+                    if greedy {
+                        // Find widest run of identical entries along u.
+                        // Sub-block u extents (slabs) must not merge along u.
+                        if entry.u_intra_extent == ft {
+                            while u + width < CHUNK_SIZE && mask[v][u + width] == Some(entry) {
+                                width += 1;
                             }
-                            height += 1;
+                        }
+
+                        // Extend the run along v.
+                        // Sub-block v extents (slabs) must not merge along v.
+                        if entry.v_intra_extent == ft {
+                            'extend: while v + height < CHUNK_SIZE {
+                                for du in 0..width {
+                                    if mask[v + height][u + du] != Some(entry) {
+                                        break 'extend;
+                                    }
+                                }
+                                height += 1;
+                            }
                         }
                     }
 
@@ -1094,15 +1103,16 @@ pub fn greedy_mesh_into<B: Block>(chunk: &PaddedChunk<B>, quads: &mut Quads<B::L
                         }
                     };
 
-                    // Merge along the merge axis while the block is identical.
                     let mut merge_len = 1u32;
-                    while m + merge_len as usize <= CHUNK_SIZE - 1 {
-                        let next_idx = col_base + (m + merge_len as usize) * merge_stride;
-                        let next = unsafe { data.get_unchecked(next_idx) };
-                        if next != block {
-                            break;
+                    if greedy {
+                        while m + merge_len as usize <= CHUNK_SIZE - 1 {
+                            let next_idx = col_base + (m + merge_len as usize) * merge_stride;
+                            let next = unsafe { data.get_unchecked(next_idx) };
+                            if next != block {
+                                break;
+                            }
+                            merge_len += 1;
                         }
-                        merge_len += 1;
                     }
 
                     let mut block_pos = [0u32; 3];
@@ -1149,7 +1159,7 @@ pub fn greedy_mesh_into<B: Block>(chunk: &PaddedChunk<B>, quads: &mut Quads<B::L
 mod tests {
     use super::*;
     use crate::block::{CullMode, Shape};
-    use crate::face::Face;
+    use crate::face::AlignedFace;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum TestBlock {
@@ -1175,10 +1185,10 @@ mod tests {
     fn block_faces_matches_greedy_mesh_for_single_block() {
         let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
         chunk.set(UVec3::ZERO, TestBlock::Stone);
-        let from_chunk = greedy_mesh(&chunk);
-        let from_block = block_faces(&TestBlock::Stone, ());
+        let from_chunk = mesh_chunk(&chunk, true);
+        let from_block = mesh_block(&TestBlock::Stone, ());
         assert_eq!(from_chunk.total(), from_block.total());
-        for face in Face::ALL {
+        for face in AlignedFace::ALL {
             assert_eq!(
                 from_chunk.faces[face.index()],
                 from_block.faces[face.index()],
@@ -1190,7 +1200,7 @@ mod tests {
 
     #[test]
     fn block_faces_air_produces_no_quads() {
-        let q = block_faces(&TestBlock::Air, ());
+        let q = mesh_block(&TestBlock::Air, ());
         assert_eq!(q.total(), 0);
     }
 
@@ -1198,8 +1208,8 @@ mod tests {
     fn single_block_quad_size_is_one_block() {
         let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
         chunk.set(UVec3::ZERO, TestBlock::Stone);
-        let q = greedy_mesh(&chunk);
-        for face in Face::ALL {
+        let q = mesh_chunk(&chunk, true);
+        for face in AlignedFace::ALL {
             let quad = &q.faces[face.index()][0];
             assert_eq!(quad.size, UVec2::new(16, 16), "face {:?}", face);
         }
@@ -1215,8 +1225,8 @@ mod tests {
                 }
             }
         }
-        let q = greedy_mesh(&chunk);
-        for face in Face::ALL {
+        let q = mesh_chunk(&chunk, true);
+        for face in AlignedFace::ALL {
             let quad = &q.faces[face.index()][0];
             assert_eq!(quad.size, UVec2::new(16 * 16, 16 * 16), "face {:?}", face);
         }

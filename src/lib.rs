@@ -6,10 +6,8 @@ mod face;
 mod light;
 mod mesh;
 
-pub use block::{
-    Block, CrossInfo, CrossStretch, CullMode, Shape, SlabInfo, Thickness, FULL_THICKNESS,
-};
+pub use block::{Block, CrossInfo, CullMode, Shape, SlabInfo};
 pub use chunk::{delinearize, linearize, PaddedChunk, CHUNK_SIZE, PADDED, PADDED_VOLUME, PADDING};
-pub use face::{Axis, DiagonalFace, Face, QuadFace};
+pub use face::{AlignedFace, Axis, DiagonalFace, Face};
 pub use light::Light;
-pub use mesh::{block_faces, block_faces_into, greedy_mesh, greedy_mesh_into, Quad, Quads};
+pub use mesh::{mesh_block, mesh_block_into, mesh_chunk, mesh_chunk_into, Quad, Quads};

@@ -1,12 +1,12 @@
 mod common;
 
 use common::*;
-use voxmesh::Face;
+use voxmesh::AlignedFace;
 
 #[test]
 fn positive_face_winding_is_ccw() {
     let q = mesh_single(TestBlock::Stone);
-    for face in [Face::PosX, Face::PosY, Face::PosZ] {
+    for face in [AlignedFace::PosX, AlignedFace::PosY, AlignedFace::PosZ] {
         assert_ccw_winding(&q, face);
     }
 }
@@ -14,7 +14,7 @@ fn positive_face_winding_is_ccw() {
 #[test]
 fn negative_face_winding_is_ccw() {
     let q = mesh_single(TestBlock::Stone);
-    for face in [Face::NegX, Face::NegY, Face::NegZ] {
+    for face in [AlignedFace::NegX, AlignedFace::NegY, AlignedFace::NegZ] {
         assert_ccw_winding(&q, face);
     }
 }

@@ -1,8 +1,9 @@
 use std::fmt::Debug;
 
-use crate::face::Face;
+use crate::face::AlignedFace;
 use crate::light::Light;
 
+/// How a block interacts with neighbor face culling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CullMode<T: PartialEq = ()> {
     /// Fully opaque. Neighbor faces against this block are always culled.
@@ -28,45 +29,46 @@ impl<T: PartialEq> CullMode<T> {
 pub type Thickness = u32;
 pub const FULL_THICKNESS: Thickness = 16;
 
+/// A partial-height slab attached to one face.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SlabInfo {
     /// Which face the slab is flush with (e.g. PosY for an upper slab).
-    pub face: Face,
+    pub face: AlignedFace,
     /// Thickness in 1/16ths of a block, range 1..=15.
     pub thickness: Thickness,
 }
 
-/// Horizontal stretch for cross-shaped billboard blocks in 1/16ths.
-/// 0 means the quad corners sit on the block diagonal (sugar cane).
-/// Higher values push the edges outward toward the block corners (cobwebs).
+/// Horizontal stretch for cross-shaped blocks in 1/16ths.
 pub type CrossStretch = u32;
 
+/// Configuration for an X-shaped diagonal cross block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CrossInfo {
     /// The face the cross is rooted on (e.g. NegY for a ground shrub).
     /// The face's axis becomes the merge axis and the two perpendicular
     /// axes form the crossing plane.
-    pub face: Face,
+    pub face: AlignedFace,
     /// Horizontal stretch in 1/16ths. 0 = square, positive = wider.
     pub stretch: CrossStretch,
 }
 
+/// The geometric shape of a block, controlling quad generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shape {
+    /// Full 1×1×1 cube.
     WholeBlock,
+    /// Partial-height slab flush with one face.
     Slab(SlabInfo),
-    /// X-shaped diagonal billboard (e.g. sugar cane, cobwebs). Two
-    /// quads crossing diagonally through the block center, oriented by
-    /// the root face.
+    /// X-shaped diagonal billboard (e.g. sugar cane, cobwebs).
     Cross(CrossInfo),
-    /// Flat zero-thickness face on one side of the block, offset 1/16th
-    /// inward. Rendered double-sided (e.g. ladders, rails).
-    Facade(Face),
-    /// Block with horizontal faces inset by `n` sixteenths. Top and
-    /// bottom are flush. Side faces are still full height (e.g. cactus).
+    /// Flat face offset 1/16th inward, rendered double-sided (e.g. ladders).
+    Facade(AlignedFace),
+    /// Side faces inset by `n` sixteenths; top/bottom flush (e.g. cactus).
     Inset(Thickness),
 }
 
+/// A voxel block type. Implement this to describe your block's shape,
+/// culling behavior, and lighting for the mesher.
 pub trait Block: Copy + PartialEq + Debug {
     /// Type used to determine whether two transparent blocks should have
     /// their shared face culled. Two `TransparentMerged` blocks cull
