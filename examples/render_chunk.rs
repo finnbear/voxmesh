@@ -127,10 +127,6 @@ impl Block for LitBlock {
         }
     }
 
-    fn ao_opaque(&self) -> bool {
-        self.block.is_opaque()
-    }
-
     fn light(&self) -> u8 {
         self.propagated_light
     }
