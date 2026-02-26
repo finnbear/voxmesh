@@ -27,7 +27,7 @@ fn cross_block_faces_matches_greedy_mesh() {
     let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
     chunk.set(glam::UVec3::ZERO, TestBlock::SugarCane);
     let from_chunk = greedy_mesh(&chunk);
-    let from_block = block_faces(&TestBlock::SugarCane);
+    let from_block = block_faces(&TestBlock::SugarCane, ());
     assert_eq!(from_chunk.total(), from_block.total());
     for diag in DiagonalFace::ALL {
         assert_eq!(
@@ -41,7 +41,7 @@ fn cross_block_faces_matches_greedy_mesh() {
 
 #[test]
 fn cross_does_not_produce_axis_aligned_faces() {
-    let q = block_faces(&TestBlock::Cobweb);
+    let q = block_faces(&TestBlock::Cobweb, ());
     for face in Face::ALL {
         assert_eq!(face_count(&q, face), 0);
     }
@@ -99,7 +99,7 @@ fn cross_does_not_cull_adjacent_opaque_block() {
 
 #[test]
 fn cross_diagonal_positions_span_unit_block() {
-    let q = block_faces(&TestBlock::SugarCane);
+    let q = block_faces(&TestBlock::SugarCane, ());
 
     for diag in DiagonalFace::ALL {
         let quad = &q.diagonals[diag.index()][0];
@@ -171,7 +171,7 @@ fn merged_cross_diagonal_height_spans_multiple_blocks() {
 
 #[test]
 fn stretched_cross_extends_beyond_block_boundary() {
-    let q = block_faces(&TestBlock::Cobweb);
+    let q = block_faces(&TestBlock::Cobweb, ());
 
     // Cobweb has stretch=4 (4/16 = 0.25 extra on each side).
     for diag in DiagonalFace::ALL {
@@ -212,7 +212,7 @@ fn cross_horizontal_neighbors_do_not_merge() {
 
 #[test]
 fn cross_texture_coordinates_span_one_by_one() {
-    let q = block_faces(&TestBlock::SugarCane);
+    let q = block_faces(&TestBlock::SugarCane, ());
     for diag in DiagonalFace::ALL {
         let quad = &q.diagonals[diag.index()][0];
         let uvs = quad.texture_coordinates(diag, Axis::X, false);
@@ -244,7 +244,7 @@ fn merged_cross_texture_coordinates_scale_vertically() {
 #[test]
 fn cross_posy_root_crosses_in_xz_plane() {
     // PosY root: same crossing plane as NegY (XZ), merge along Y.
-    let q = block_faces(&TestBlock::Chain);
+    let q = block_faces(&TestBlock::Chain, ());
     assert_eq!(q.total(), 2);
 
     for diag in DiagonalFace::ALL {
@@ -268,7 +268,7 @@ fn cross_posy_root_crosses_in_xz_plane() {
 #[test]
 fn cross_posx_root_crosses_in_yz_plane() {
     // PosX root: crossing in YZ, merge along X.
-    let q = block_faces(&TestBlock::Vine);
+    let q = block_faces(&TestBlock::Vine, ());
     assert_eq!(q.total(), 2);
 
     for diag in DiagonalFace::ALL {

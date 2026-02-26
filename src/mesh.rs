@@ -336,12 +336,10 @@ fn is_culled_at_boundary<B: Block>(block: &B, neighbor: &B, face: Face) -> bool 
     }
     match (block.cull_mode(), neighbor.cull_mode()) {
         (_, CullMode::Opaque) => true,
-        (CullMode::TransparentMerged(a), CullMode::TransparentMerged(b)) => {
-            // Equal groups: cull both faces (standard merge).
-            // Different groups: cull the negative face so only one
-            // face is emitted per boundary, avoiding z-fighting.
-            a == b || !face.is_positive()
-        }
+        (CullMode::TransparentMerged(a), CullMode::TransparentMerged(b)) => a == b,
+        // Unmerged transparent: cull the negative face so only one
+        // face is emitted per boundary, avoiding z-fighting.
+        (CullMode::TransparentUnmerged, CullMode::TransparentUnmerged) => !face.is_positive(),
         _ => false,
     }
 }
@@ -798,24 +796,27 @@ fn emit_cross_quads<B: Block>(
 /// The resulting [`Quad`] positions span [0, 1] (or the appropriate
 /// sub-range for slabs), the same coordinate space as a block at
 /// (0,0,0) in a chunk.
-pub fn block_faces<B: Block>(block: &B) -> Quads<B::Light> {
+pub fn block_faces<B: Block>(block: &B, light: <B::Light as Light>::Average) -> Quads<B::Light> {
     let mut quads = Quads::new();
-    block_faces_into(block, &mut quads);
+    block_faces_into(block, light, &mut quads);
     quads
 }
 
 /// Like [`block_faces`], but reuses an existing [`Quads`] buffer.
 ///
-/// The single block's own light value is used for all vertices (no
-/// neighbor data is available), and AO is disabled.
-pub fn block_faces_into<B: Block>(block: &B, quads: &mut Quads<B::Light>) {
+/// `light` is applied uniformly to all vertices. AO is disabled.
+pub fn block_faces_into<B: Block>(
+    block: &B,
+    light: <B::Light as Light>::Average,
+    quads: &mut Quads<B::Light>,
+) {
     quads.reset();
 
     if !block.cull_mode().is_renderable() {
         return;
     }
 
-    let avg = B::Light::average(&[block.light()]);
+    let avg = light;
 
     if let Shape::Cross(info) = block.shape() {
         let p = PADDING as u32;
@@ -1129,7 +1130,7 @@ mod tests {
         let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
         chunk.set(UVec3::ZERO, TestBlock::Stone);
         let from_chunk = greedy_mesh(&chunk);
-        let from_block = block_faces(&TestBlock::Stone);
+        let from_block = block_faces(&TestBlock::Stone, ());
         assert_eq!(from_chunk.total(), from_block.total());
         for face in Face::ALL {
             assert_eq!(
@@ -1143,7 +1144,7 @@ mod tests {
 
     #[test]
     fn block_faces_air_produces_no_quads() {
-        let q = block_faces(&TestBlock::Air);
+        let q = block_faces(&TestBlock::Air, ());
         assert_eq!(q.total(), 0);
     }
 

@@ -33,7 +33,7 @@ fn facade_block_faces_matches_greedy_mesh() {
     let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
     chunk.set(glam::UVec3::ZERO, TestBlock::Ladder);
     let from_chunk = greedy_mesh(&chunk);
-    let from_block = block_faces(&TestBlock::Ladder);
+    let from_block = block_faces(&TestBlock::Ladder, ());
     assert_eq!(from_chunk.total(), from_block.total());
     for face in Face::ALL {
         assert_eq!(
@@ -47,7 +47,7 @@ fn facade_block_faces_matches_greedy_mesh() {
 
 #[test]
 fn facade_posx_is_offset_from_face() {
-    let q = block_faces(&TestBlock::Ladder);
+    let q = block_faces(&TestBlock::Ladder, ());
     let quad = &q.faces[Face::PosX.index()][0];
     let verts = quad.positions(Face::PosX, TestBlock::Ladder.shape());
 
@@ -63,7 +63,7 @@ fn facade_posx_is_offset_from_face() {
 
 #[test]
 fn facade_negy_is_offset_from_face() {
-    let q = block_faces(&TestBlock::Rail);
+    let q = block_faces(&TestBlock::Rail, ());
     let quad = &q.faces[Face::NegY.index()][0];
     let verts = quad.positions(Face::NegY, TestBlock::Rail.shape());
 
@@ -155,7 +155,7 @@ fn facade_voxel_position_is_correct() {
 
 #[test]
 fn facade_texture_coordinates_span_one() {
-    let q = block_faces(&TestBlock::Ladder);
+    let q = block_faces(&TestBlock::Ladder, ());
     let quad = &q.faces[Face::PosX.index()][0];
     let uvs = quad.texture_coordinates(Face::PosX, Axis::X, false);
 

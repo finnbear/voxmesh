@@ -34,10 +34,11 @@ fn glass_next_to_stone_does_not_cull_stone() {
 }
 
 #[test]
-fn leaves_never_cull_neighbor() {
+fn leaves_emit_one_face_per_boundary() {
     let q = mesh_with(&[(0, 0, 0, TestBlock::Leaves), (1, 0, 0, TestBlock::Leaves)]);
-    // TransparentUnmerged never culls, both blocks keep all 6 faces.
+    // TransparentUnmerged emits only the positive face at each internal
+    // boundary to avoid z-fighting.
     // Coplanar same-type faces merge on PosY/NegY/PosZ/NegZ (4 merged).
-    // PosX:1 + NegX:1 + internal PosX:1 + internal NegX:1 + 4 merged = 8.
-    assert_eq!(q.total(), 8);
+    // PosX:1 + NegX:1 + internal PosX:1 + 4 merged = 7.
+    assert_eq!(q.total(), 7);
 }

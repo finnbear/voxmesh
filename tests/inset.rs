@@ -26,7 +26,7 @@ fn inset_block_faces_matches_greedy_mesh() {
     let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
     chunk.set(glam::UVec3::ZERO, TestBlock::Cactus);
     let from_chunk = greedy_mesh(&chunk);
-    let from_block = block_faces(&TestBlock::Cactus);
+    let from_block = block_faces(&TestBlock::Cactus, ());
     assert_eq!(from_chunk.total(), from_block.total());
     for face in Face::ALL {
         assert_eq!(
@@ -40,7 +40,7 @@ fn inset_block_faces_matches_greedy_mesh() {
 
 #[test]
 fn inset_side_faces_are_offset() {
-    let q = block_faces(&TestBlock::Cactus);
+    let q = block_faces(&TestBlock::Cactus, ());
 
     // PosX: all vertices should have x = 15/16.
     assert_face_on_plane(&q, Face::PosX, 0, 15.0 / 16.0);
@@ -54,7 +54,7 @@ fn inset_side_faces_are_offset() {
 
 #[test]
 fn inset_top_bottom_at_boundary() {
-    let q = block_faces(&TestBlock::Cactus);
+    let q = block_faces(&TestBlock::Cactus, ());
 
     // PosY: all vertices should have y = 1.0.
     assert_face_on_plane(&q, Face::PosY, 1, 1.0);
@@ -162,7 +162,7 @@ fn inset_voxel_position_is_correct() {
 
 #[test]
 fn inset_texture_coordinates_span_one() {
-    let q = block_faces(&TestBlock::Cactus);
+    let q = block_faces(&TestBlock::Cactus, ());
     for face in Face::ALL {
         let quad = &q.faces[face.index()][0];
         let uvs = quad.texture_coordinates(face, Axis::X, false);
