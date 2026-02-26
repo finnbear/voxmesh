@@ -13,6 +13,9 @@ Voxel greedy meshing library
   - Positions
   - Normals
   - Texture coordinates
+  - Smooth lighting
+  - Ambient occlusion
+  - Indices
 - Mesh a single block or a chunk
 
 ## Assumptions
@@ -22,3 +25,4 @@ Voxel greedy meshing library
 - Blocks are 1 unit wide
 - Sub-block positions and sizes are in units of 1/16
 - Merging is based on simple equality comparison
+- You must propagate per-voxel light in advance

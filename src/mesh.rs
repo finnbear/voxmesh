@@ -494,17 +494,29 @@ fn compute_slab_mask_entry<B: Block>(
     mask_entry_for_shape(block, face, u_idx, v_idx)
 }
 
-/// Whether a block occludes AO on the given face, combining the
-/// material check ([`Block::ao_opaque`]) with shape: whole blocks
-/// always occlude, slabs only on their flush face, others never.
+/// Whether a block's shape fills the given face (whole blocks always,
+/// slabs only on their flush face, others never).
+#[inline]
+fn shape_fills_face<B: Block>(block: &B, face: Face) -> bool {
+    match block.shape() {
+        Shape::WholeBlock => true,
+        Shape::Slab(info) => info.face == face,
+        _ => false,
+    }
+}
+
+/// Whether a block occludes AO on the given face: material is
+/// AO-opaque and shape fills that face.
 #[inline]
 fn shape_ao_opaque<B: Block>(block: &B, face: Face) -> bool {
-    block.ao_opaque()
-        && match block.shape() {
-            Shape::WholeBlock => true,
-            Shape::Slab(info) => info.face == face,
-            _ => false,
-        }
+    block.ao_opaque() && shape_fills_face(block, face)
+}
+
+/// Whether a block blocks light passage on the given face: material is
+/// fully opaque and shape fills that face.
+#[inline]
+fn shape_light_opaque<B: Block>(block: &B, face: Face) -> bool {
+    matches!(block.cull_mode(), CullMode::Opaque) && shape_fills_face(block, face)
 }
 
 /// Computes per-vertex AO and smooth light for a face cell.
@@ -528,7 +540,6 @@ fn compute_ao_light<B: Block>(
     // The face of each neighbor facing toward the lit surface is
     // `face.opposite()`.
     let ao_face = face.opposite();
-    let ao = |b: &B| shape_ao_opaque(b, ao_face);
 
     // Load all 9 neighbors in the face-normal plane once.
     let get = |du: isize, dv: isize| -> &B {
@@ -545,42 +556,44 @@ fn compute_ao_light<B: Block>(
     let pos_u_pos_v = get(u_stride, v_stride);
     let neg_u_pos_v = get(-u_stride, v_stride);
 
-    let s_neg_u = ao(neg_u);
-    let s_pos_u = ao(pos_u);
-    let s_neg_v = ao(neg_v);
-    let s_pos_v = ao(pos_v);
+    // AO: does the material darken neighboring vertices?
+    let ao_neg_u = shape_ao_opaque(neg_u, ao_face);
+    let ao_pos_u = shape_ao_opaque(pos_u, ao_face);
+    let ao_neg_v = shape_ao_opaque(neg_v, ao_face);
+    let ao_pos_v = shape_ao_opaque(pos_v, ao_face);
 
-    // Vertex 0: (u_min, v_min) — neighbors: neg_u, neg_v, neg_u_neg_v
-    let ao0 = if s_neg_u && s_neg_v {
+    let ao0 = if ao_neg_u && ao_neg_v {
         0
     } else {
-        3 - s_neg_u as u8 - s_neg_v as u8 - ao(neg_u_neg_v) as u8
+        3 - ao_neg_u as u8 - ao_neg_v as u8 - shape_ao_opaque(neg_u_neg_v, ao_face) as u8
     };
-
-    // Vertex 1: (u_max, v_min) — neighbors: pos_u, neg_v, pos_u_neg_v
-    let ao1 = if s_pos_u && s_neg_v {
+    let ao1 = if ao_pos_u && ao_neg_v {
         0
     } else {
-        3 - s_pos_u as u8 - s_neg_v as u8 - ao(pos_u_neg_v) as u8
+        3 - ao_pos_u as u8 - ao_neg_v as u8 - shape_ao_opaque(pos_u_neg_v, ao_face) as u8
     };
-
-    // Vertex 2: (u_max, v_max) — neighbors: pos_u, pos_v, pos_u_pos_v
-    let ao2 = if s_pos_u && s_pos_v {
+    let ao2 = if ao_pos_u && ao_pos_v {
         0
     } else {
-        3 - s_pos_u as u8 - s_pos_v as u8 - ao(pos_u_pos_v) as u8
+        3 - ao_pos_u as u8 - ao_pos_v as u8 - shape_ao_opaque(pos_u_pos_v, ao_face) as u8
     };
-
-    // Vertex 3: (u_min, v_max) — neighbors: neg_u, pos_v, neg_u_pos_v
-    let ao3 = if s_neg_u && s_pos_v {
+    let ao3 = if ao_neg_u && ao_pos_v {
         0
     } else {
-        3 - s_neg_u as u8 - s_pos_v as u8 - ao(neg_u_pos_v) as u8
+        3 - ao_neg_u as u8 - ao_pos_v as u8 - shape_ao_opaque(neg_u_pos_v, ao_face) as u8
     };
 
     let ao = [ao0, ao1, ao2, ao3];
 
-    // Smooth light: each vertex averages light from up to 4 voxels.
+    // Light: does the block block light passage? Only fully opaque
+    // materials that fill the face prevent light from contributing.
+    let l_neg_u = shape_light_opaque(neg_u, ao_face);
+    let l_pos_u = shape_light_opaque(pos_u, ao_face);
+    let l_neg_v = shape_light_opaque(neg_v, ao_face);
+    let l_pos_v = shape_light_opaque(pos_v, ao_face);
+
+    // Smooth light: each vertex averages light from up to 4 voxels,
+    // excluding directions blocked by opaque geometry.
     let vertex_light = |s1_opaque: bool,
                         s2_opaque: bool,
                         center_l: B::Light,
@@ -602,32 +615,32 @@ fn compute_ao_light<B: Block>(
     let cl = center.light();
     let light = [
         vertex_light(
-            s_neg_u,
-            s_neg_v,
+            l_neg_u,
+            l_neg_v,
             cl,
             neg_u.light(),
             neg_v.light(),
             neg_u_neg_v.light(),
         ),
         vertex_light(
-            s_pos_u,
-            s_neg_v,
+            l_pos_u,
+            l_neg_v,
             cl,
             pos_u.light(),
             neg_v.light(),
             pos_u_neg_v.light(),
         ),
         vertex_light(
-            s_pos_u,
-            s_pos_v,
+            l_pos_u,
+            l_pos_v,
             cl,
             pos_u.light(),
             pos_v.light(),
             pos_u_pos_v.light(),
         ),
         vertex_light(
-            s_neg_u,
-            s_pos_v,
+            l_neg_u,
+            l_pos_v,
             cl,
             neg_u.light(),
             pos_v.light(),
