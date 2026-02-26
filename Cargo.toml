@@ -1,6 +1,10 @@
 [package]
 name = "voxmesh"
+authors = ["Finn Bear", "Claude Code"]
 version = "0.1.0"
+license = "MIT OR Apache-2.0"
+descripton = "Voxel greedy meshing library"
+repository = "https://github.com/finnbear/voxmesh/"
 edition = "2021"
 
 [dependencies]
