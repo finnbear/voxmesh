@@ -1,4 +1,5 @@
 use std::fmt::Debug;
+use std::mem;
 
 /// Per-vertex light value that can be averaged across neighboring voxels.
 ///
@@ -9,40 +10,47 @@ use std::fmt::Debug;
 pub trait Light: Copy + PartialEq + Eq + Debug + Default {
     /// Whether AO and light computation is enabled.
     /// When false, the compiler eliminates all lighting code paths.
-    const ENABLED: bool;
+    /// Defaults to `true` for non-zero-sized types.
+    const ENABLED: bool = mem::size_of::<Self>() > 0;
 
-    /// Average up to 4 light values. `values[0..count]` are the valid entries.
-    fn average(values: [Self; 4], count: u8) -> Self;
+    /// The type returned by [`average`](Self::average).
+    ///
+    /// For integer light types like `u8` this is typically `f32` to
+    /// preserve fractional precision; for `()` it stays `()`.
+    type Average: Copy + Default + Debug + PartialEq;
+
+    /// Average the given light values.
+    fn average(values: &[Self]) -> Self::Average;
 }
 
 impl Light for () {
-    const ENABLED: bool = false;
+    type Average = ();
 
     #[inline]
-    fn average(_values: [(); 4], _count: u8) {}
+    fn average(_values: &[()]) {}
 }
 
 impl Light for u8 {
-    const ENABLED: bool = true;
+    type Average = f32;
 
     #[inline]
-    fn average(values: [u8; 4], count: u8) -> u8 {
-        let sum: u16 = values[..count as usize].iter().map(|&v| v as u16).sum();
-        (sum / count as u16) as u8
+    fn average(values: &[u8]) -> f32 {
+        let sum: u16 = values.iter().map(|&v| v as u16).sum();
+        sum as f32 / values.len() as f32
     }
 }
 
 impl Light for [u8; 2] {
-    const ENABLED: bool = true;
+    type Average = [f32; 2];
 
     #[inline]
-    fn average(values: [[u8; 2]; 4], count: u8) -> [u8; 2] {
-        let c = count as u16;
+    fn average(values: &[[u8; 2]]) -> [f32; 2] {
+        let len = values.len() as f32;
         let mut sums = [0u16; 2];
-        for v in &values[..count as usize] {
+        for v in values {
             sums[0] += v[0] as u16;
             sums[1] += v[1] as u16;
         }
-        [(sums[0] / c) as u8, (sums[1] / c) as u8]
+        [sums[0] as f32 / len, sums[1] as f32 / len]
     }
 }

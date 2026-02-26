@@ -5,7 +5,7 @@ use crate::chunk::{PaddedChunk, CHUNK_SIZE, PADDED, PADDING};
 use crate::face::{Axis, DiagonalFace, Face, QuadFace};
 use crate::light::Light;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Quad<L: Light = ()> {
     /// Position of the lowest-coordinate corner in 1/16ths of a block,
     /// in the padded 3D space of the chunk.
@@ -15,9 +15,9 @@ pub struct Quad<L: Light = ()> {
     /// Per-vertex ambient occlusion (0=fully occluded, 3=fully lit).
     /// Vertex order matches [`positions`](Self::positions).
     pub ao: [u8; 4],
-    /// Per-vertex smooth light values.
+    /// Per-vertex averaged light values.
     /// Vertex order matches [`positions`](Self::positions).
-    pub light: [L; 4],
+    pub light: [L::Average; 4],
 }
 
 /// Returns the (u, v) tangent vectors for a face.
@@ -255,7 +255,7 @@ pub struct Quads<L: Light = ()> {
 
 // Greedy meshing internals
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq)]
 struct MaskEntry<B: Block> {
     block: B,
     /// Face surface position along the normal axis in 1/16ths from the
@@ -273,7 +273,7 @@ struct MaskEntry<B: Block> {
     /// Per-vertex AO in mask-local order: [umin/vmin, umax/vmin, umax/vmax, umin/vmax].
     ao: [u8; 4],
     /// Per-vertex light in mask-local order.
-    light: [<B as Block>::Light; 4],
+    light: [<<B as Block>::Light as Light>::Average; 4],
 }
 
 /// Returns the two axis indices perpendicular to the given axis,
@@ -369,7 +369,7 @@ fn mask_entry_for_shape<B: Block>(
                 v_intra_offset: 0,
                 v_intra_extent: ft,
                 ao: [3; 4],
-                light: [B::Light::default(); 4],
+                light: Default::default(),
             });
         }
         Shape::WholeBlock | Shape::Inset(_) => {
@@ -403,7 +403,7 @@ fn mask_entry_for_shape<B: Block>(
                 v_intra_offset: 0,
                 v_intra_extent: ft,
                 ao: [3; 4],
-                light: [B::Light::default(); 4],
+                light: Default::default(),
             })
         }
         Shape::Slab(info) => {
@@ -434,7 +434,7 @@ fn mask_entry_for_shape<B: Block>(
                     v_intra_offset: 0,
                     v_intra_extent: ft,
                     ao: [3; 4],
-                    light: [B::Light::default(); 4],
+                    light: Default::default(),
                 })
             } else {
                 let normal_pos = if face.is_positive() { ft } else { 0 };
@@ -454,7 +454,7 @@ fn mask_entry_for_shape<B: Block>(
                     v_intra_offset: v_off,
                     v_intra_extent: v_ext,
                     ao: [3; 4],
-                    light: [B::Light::default(); 4],
+                    light: Default::default(),
                 })
             }
         }
@@ -506,7 +506,7 @@ fn compute_ao_light<B: Block>(
     n_idx: usize,
     u_stride: isize,
     v_stride: isize,
-) -> ([u8; 4], [B::Light; 4]) {
+) -> ([u8; 4], [<B::Light as Light>::Average; 4]) {
     // Load all 9 neighbors in the face-normal plane once.
     let get = |du: isize, dv: isize| -> &B {
         unsafe { data.get_unchecked((n_idx as isize + du + dv) as usize) }
@@ -564,29 +564,15 @@ fn compute_ao_light<B: Block>(
                         s1_l: B::Light,
                         s2_l: B::Light,
                         corner_l: B::Light|
-     -> B::Light {
+     -> <B::Light as Light>::Average {
         if s1_opaque && s2_opaque {
-            B::Light::average(
-                [
-                    center_l,
-                    B::Light::default(),
-                    B::Light::default(),
-                    B::Light::default(),
-                ],
-                1,
-            )
+            B::Light::average(&[center_l])
         } else if s1_opaque {
-            B::Light::average(
-                [center_l, s2_l, B::Light::default(), B::Light::default()],
-                2,
-            )
+            B::Light::average(&[center_l, s2_l])
         } else if s2_opaque {
-            B::Light::average(
-                [center_l, s1_l, B::Light::default(), B::Light::default()],
-                2,
-            )
+            B::Light::average(&[center_l, s1_l])
         } else {
-            B::Light::average([center_l, s1_l, s2_l, corner_l], 4)
+            B::Light::average(&[center_l, s1_l, s2_l, corner_l])
         }
     };
 
@@ -772,8 +758,8 @@ fn emit_cross_quads<B: Block>(
     block_pos: [u32; 3],
     root_face: Face,
     merge_len: u32,
-    light_bottom: B::Light,
-    light_top: B::Light,
+    light_bottom: <B::Light as Light>::Average,
+    light_top: <B::Light as Light>::Average,
 ) {
     let ft32 = FULL_THICKNESS;
     let merge_axis = root_face.axis().index();
@@ -814,6 +800,9 @@ pub fn block_faces<B: Block>(block: &B) -> Quads<B::Light> {
 }
 
 /// Like [`block_faces`], but reuses an existing [`Quads`] buffer.
+///
+/// The single block's own light value is used for all vertices (no
+/// neighbor data is available), and AO is disabled.
 pub fn block_faces_into<B: Block>(block: &B, quads: &mut Quads<B::Light>) {
     quads.reset();
 
@@ -821,17 +810,19 @@ pub fn block_faces_into<B: Block>(block: &B, quads: &mut Quads<B::Light>) {
         return;
     }
 
+    let avg = B::Light::average(&[block.light()]);
+
     if let Shape::Cross(info) = block.shape() {
         let p = PADDING as u32;
-        let l = block.light();
-        emit_cross_quads::<B>(quads, [p, p, p], info.face, 1, l, l);
+        emit_cross_quads::<B>(quads, [p, p, p], info.face, 1, avg, avg);
         return;
     }
 
     for face in Face::ALL {
         let (normal_idx, u_idx, v_idx) = face_axis_indices(face);
 
-        if let Some(entry) = mask_entry_for_shape(block, face, u_idx, v_idx) {
+        if let Some(mut entry) = mask_entry_for_shape(block, face, u_idx, v_idx) {
+            entry.light = [avg; 4];
             let quad = emit_quad(
                 &entry,
                 normal_idx,
@@ -907,7 +898,7 @@ pub fn greedy_mesh_into<B: Block>(chunk: &PaddedChunk<B>, quads: &mut Quads<B::L
                                 v_intra_offset: 0,
                                 v_intra_extent: ft,
                                 ao: [3; 4],
-                                light: [B::Light::default(); 4],
+                                light: Default::default(),
                             })
                         }
                     } else if matches!(block.shape(), Shape::Cross(_)) {
@@ -1075,31 +1066,15 @@ pub fn greedy_mesh_into<B: Block>(chunk: &PaddedChunk<B>, quads: &mut Quads<B::L
                         let below_idx = (first_idx as isize - merge_stride as isize) as usize;
                         let below = unsafe { data.get_unchecked(below_idx) };
                         let first = unsafe { data.get_unchecked(first_idx) };
-                        let light_bottom = B::Light::average(
-                            [
-                                first.light(),
-                                below.light(),
-                                B::Light::default(),
-                                B::Light::default(),
-                            ],
-                            2,
-                        );
+                        let light_bottom = B::Light::average(&[first.light(), below.light()]);
                         // Top: average of last block and the block above it.
                         let above_idx = last_idx + merge_stride;
                         let above = unsafe { data.get_unchecked(above_idx) };
                         let last = unsafe { data.get_unchecked(last_idx) };
-                        let light_top = B::Light::average(
-                            [
-                                last.light(),
-                                above.light(),
-                                B::Light::default(),
-                                B::Light::default(),
-                            ],
-                            2,
-                        );
+                        let light_top = B::Light::average(&[last.light(), above.light()]);
                         (light_bottom, light_top)
                     } else {
-                        (B::Light::default(), B::Light::default())
+                        Default::default()
                     };
 
                     emit_cross_quads::<B>(
