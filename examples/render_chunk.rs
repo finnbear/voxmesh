@@ -1,9 +1,13 @@
 //! Software-renders a greedy-meshed voxel chunk using `euc` and writes the
 //! result to `examples/render_chunk.png`.
 //!
+//! Demonstrates per-vertex ambient occlusion and smooth lighting with
+//! BFS light propagation from lamp blocks.
+//!
 //! Run with:
 //!   cargo run --example render_chunk
 
+use std::collections::VecDeque;
 use std::path::Path;
 
 use euc::{
@@ -33,13 +37,43 @@ enum MyBlock {
     ChainY,    // Cross rooted on NegY, vertical chains
     ChainX,    // Cross rooted on PosX, horizontal chains along X
     ChainZ,    // Cross rooted on PosZ, horizontal chains along Z
+    Lamp,      // Light-emitting block
 }
 
-impl Block for MyBlock {
+impl MyBlock {
+    fn is_opaque(self) -> bool {
+        matches!(
+            self,
+            MyBlock::Cobblestone
+                | MyBlock::CobbleSlab
+                | MyBlock::Clay
+                | MyBlock::Debug
+                | MyBlock::Lamp
+                | MyBlock::Cactus
+        )
+    }
+
+    fn emitted_light(self) -> u8 {
+        match self {
+            MyBlock::Lamp => 15,
+            _ => 0,
+        }
+    }
+}
+
+/// A block paired with a propagated light level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LitBlock {
+    block: MyBlock,
+    propagated_light: u8,
+}
+
+impl Block for LitBlock {
     type TransparentGroup = ();
+    type Light = u8;
 
     fn shape(&self) -> Shape {
-        match self {
+        match self.block {
             MyBlock::CobbleSlab => Shape::Slab(SlabInfo {
                 face: Face::NegY,
                 thickness: 8,
@@ -72,11 +106,13 @@ impl Block for MyBlock {
     }
 
     fn cull_mode(&self) -> CullMode {
-        match self {
+        match self.block {
             MyBlock::Air => CullMode::Empty,
-            MyBlock::Cobblestone | MyBlock::Clay | MyBlock::CobbleSlab | MyBlock::Debug => {
-                CullMode::Opaque
-            }
+            MyBlock::Cobblestone
+            | MyBlock::Clay
+            | MyBlock::CobbleSlab
+            | MyBlock::Debug
+            | MyBlock::Lamp => CullMode::Opaque,
             MyBlock::Glass => CullMode::TransparentMerged(()),
             MyBlock::Cactus
             | MyBlock::SugarCane
@@ -88,6 +124,57 @@ impl Block for MyBlock {
             | MyBlock::ChainX
             | MyBlock::ChainZ => CullMode::TransparentUnmerged,
             MyBlock::Leaves => CullMode::TransparentUnmerged,
+        }
+    }
+
+    fn ao_opaque(&self) -> bool {
+        self.block.is_opaque()
+    }
+
+    fn light(&self) -> u8 {
+        self.propagated_light
+    }
+}
+
+/// BFS flood-fill light propagation across the padded chunk.
+fn propagate_light(chunk: &mut PaddedChunk<LitBlock>) {
+    let mut queue = VecDeque::new();
+
+    // Seed with all emitting blocks.
+    for i in 0..PADDED_VOLUME {
+        let b = chunk.data[i];
+        if b.propagated_light > 0 {
+            queue.push_back((i, b.propagated_light));
+        }
+    }
+
+    let strides: [isize; 6] = [
+        1,
+        -1,
+        PADDED as isize,
+        -(PADDED as isize),
+        (PADDED * PADDED) as isize,
+        -((PADDED * PADDED) as isize),
+    ];
+
+    while let Some((idx, level)) = queue.pop_front() {
+        if level <= 1 {
+            continue;
+        }
+        let new_level = level - 1;
+
+        for &stride in &strides {
+            let ni = idx as isize + stride;
+            if ni < 0 || ni >= PADDED_VOLUME as isize {
+                continue;
+            }
+            let ni = ni as usize;
+            let neighbor = &mut chunk.data[ni];
+            // Propagate through non-opaque blocks (or any block with lower light).
+            if !neighbor.block.is_opaque() && neighbor.propagated_light < new_level {
+                neighbor.propagated_light = new_level;
+                queue.push_back((ni, new_level));
+            }
         }
     }
 }
@@ -121,6 +208,7 @@ fn build_atlas() -> Buffer2d<Rgba<f32>> {
         "examples/cactus_top.png",
         "examples/cactus_bottom.png",
         "examples/chain.png",
+        "examples/lamp.png",
     ]
     .iter()
     .map(|p| load_tile(p))
@@ -155,9 +243,10 @@ fn atlas_u_offset(block: MyBlock, face: QuadFace) -> f32 {
         MyBlock::Cactus => match face {
             QuadFace::Aligned(Face::PosY) => 11.0,
             QuadFace::Aligned(Face::NegY) => 12.0,
-            _ => 10.0, // side faces
+            _ => 10.0,
         },
         MyBlock::ChainY | MyBlock::ChainX | MyBlock::ChainZ => 13.0,
+        MyBlock::Lamp => 14.0,
         MyBlock::Air => 0.0,
     }
 }
@@ -169,6 +258,10 @@ struct Vertex {
     pos: Vec4<f32>,
     uv: Vec2<f32>,
     normal: Vec3<f32>,
+    /// Per-vertex AO (0.0 = fully occluded, 1.0 = fully lit).
+    ao: f32,
+    /// Per-vertex smooth light (0.0..1.0).
+    smooth_light: f32,
     // Block that produced this quad, for render pass filtering.
     block: MyBlock,
     // Pre-computed atlas tile offset for this face.
@@ -183,6 +276,8 @@ struct VsOut {
     uv: Vec2<f32>,
     normal: Vec3<f32>,
     atlas_u_offset: f32,
+    ao: f32,
+    smooth_light: f32,
 }
 
 impl std::ops::Mul<f32> for VsOut {
@@ -192,6 +287,8 @@ impl std::ops::Mul<f32> for VsOut {
             uv: self.uv * w,
             normal: self.normal * w,
             atlas_u_offset: self.atlas_u_offset * w,
+            ao: self.ao * w,
+            smooth_light: self.smooth_light * w,
         }
     }
 }
@@ -203,6 +300,8 @@ impl std::ops::Add for VsOut {
             uv: self.uv + rhs.uv,
             normal: self.normal + rhs.normal,
             atlas_u_offset: self.atlas_u_offset + rhs.atlas_u_offset,
+            ao: self.ao + rhs.ao,
+            smooth_light: self.smooth_light + rhs.smooth_light,
         }
     }
 }
@@ -247,6 +346,8 @@ impl<'r, 'a: 'r> Pipeline<'r> for ChunkPipeline<'a> {
                 uv: v.uv,
                 normal: v.normal,
                 atlas_u_offset: v.atlas_offset,
+                ao: v.ao,
+                smooth_light: v.smooth_light,
             },
         )
     }
@@ -263,11 +364,14 @@ impl<'r, 'a: 'r> Pipeline<'r> for ChunkPipeline<'a> {
 
         let texel = self.atlas.read([px, py]);
 
-        // Simple directional lighting.
+        // Directional lighting.
         let light_dir = Vec3::new(0.4, 0.7, 0.5).normalized();
         let ndotl = vs.normal.normalized().dot(light_dir).max(0.0);
         let ambient = 0.35;
-        let shade = ambient + (1.0 - ambient) * ndotl;
+        let directional = ambient + (1.0 - ambient) * ndotl;
+
+        // Combine: directional * AO + voxel light contribution.
+        let shade = directional * vs.ao + vs.smooth_light * 0.6;
 
         Rgba::new(texel.r * shade, texel.g * shade, texel.b * shade, texel.a)
     }
@@ -287,15 +391,29 @@ impl<'r, 'a: 'r> Pipeline<'r> for ChunkPipeline<'a> {
 
 // Scene construction
 
-fn build_chunk() -> PaddedChunk<MyBlock> {
+fn build_chunk() -> PaddedChunk<LitBlock> {
     use glam::UVec3;
 
-    let mut chunk = PaddedChunk::new_filled(MyBlock::Air);
+    let air = LitBlock {
+        block: MyBlock::Air,
+        propagated_light: 0,
+    };
+    let mut chunk = PaddedChunk::new_filled(air);
+
+    let set = |chunk: &mut PaddedChunk<LitBlock>, x: u32, y: u32, z: u32, block: MyBlock| {
+        chunk.set(
+            UVec3::new(x, y, z),
+            LitBlock {
+                block,
+                propagated_light: block.emitted_light(),
+            },
+        );
+    };
 
     // Cobblestone floor (y=0).
     for x in 0..CHUNK_SIZE as u32 {
         for z in 0..CHUNK_SIZE as u32 {
-            chunk.set(UVec3::new(x, 0, z), MyBlock::Cobblestone);
+            set(&mut chunk, x, 0, z, MyBlock::Cobblestone);
         }
     }
 
@@ -303,40 +421,44 @@ fn build_chunk() -> PaddedChunk<MyBlock> {
     let pillars = [(2, 2), (2, 13), (13, 2), (13, 13)];
     for &(px, pz) in &pillars {
         for y in 1..6 {
-            chunk.set(UVec3::new(px, y, pz), MyBlock::Clay);
+            set(&mut chunk, px, y, pz, MyBlock::Clay);
         }
     }
 
     // Sugar cane stalks (3 blocks tall).
     for &(sx, sz) in &[(1, 1), (1, 2), (2, 1), (14, 14), (14, 15)] {
         for y in 1..4 {
-            chunk.set(UVec3::new(sx, y, sz), MyBlock::SugarCane);
+            set(&mut chunk, sx, y, sz, MyBlock::SugarCane);
         }
     }
 
     // Cobwebs in the upper corners between pillars.
     for &(cx, cz) in &[(3, 3), (3, 12), (12, 3), (12, 12)] {
-        chunk.set(UVec3::new(cx, 5, cz), MyBlock::Cobweb);
+        set(&mut chunk, cx, 5, cz, MyBlock::Cobweb);
     }
 
     // Debug blocks for UV visualization.
-    chunk.set(UVec3::new(7, 1, 5), MyBlock::Debug);
-    chunk.set(UVec3::new(9, 1, 5), MyBlock::Debug);
+    set(&mut chunk, 7, 1, 5, MyBlock::Debug);
+    set(&mut chunk, 9, 1, 5, MyBlock::Debug);
 
     // Shrubs scattered around.
     for &(sx, sz) in &[(1, 3), (6, 10), (10, 6), (9, 11), (4, 4)] {
-        chunk.set(UVec3::new(sx, 1, sz), MyBlock::Shrub);
+        set(&mut chunk, sx, 1, sz, MyBlock::Shrub);
     }
 
     // Cactus pillars (3 blocks tall).
     for &(cx, cz) in &[(4, 1), (10, 10)] {
         for y in 1..4 {
-            chunk.set(UVec3::new(cx, y, cz), MyBlock::Cactus);
+            set(&mut chunk, cx, y, cz, MyBlock::Cactus);
         }
     }
 
+    // Lamp blocks as light sources.
+    set(&mut chunk, 8, 1, 5, MyBlock::Lamp);
+    set(&mut chunk, 5, 5, 5, MyBlock::Lamp);
+    set(&mut chunk, 10, 5, 10, MyBlock::Lamp);
+
     // Chains surrounding the building (all 3 cross root axes).
-    // Vertical chains (Y-axis) hanging from canopy corners.
     for &(cx, cz) in &[
         (1, 5),
         (1, 10),
@@ -348,92 +470,94 @@ fn build_chunk() -> PaddedChunk<MyBlock> {
         (10, 14),
     ] {
         for y in 2..6 {
-            chunk.set(UVec3::new(cx, y, cz), MyBlock::ChainY);
+            set(&mut chunk, cx, y, cz, MyBlock::ChainY);
         }
     }
-    // Horizontal chains along X (X-axis) on the z=1 and z=14 walls.
     for x in 4..12 {
-        chunk.set(UVec3::new(x, 4, 1), MyBlock::ChainX);
-        chunk.set(UVec3::new(x, 4, 14), MyBlock::ChainX);
+        set(&mut chunk, x, 4, 1, MyBlock::ChainX);
+        set(&mut chunk, x, 4, 14, MyBlock::ChainX);
     }
-    // Horizontal chains along Z (Z-axis) on the x=1 and x=14 walls.
     for z in 4..12 {
-        chunk.set(UVec3::new(1, 4, z), MyBlock::ChainZ);
-        chunk.set(UVec3::new(14, 4, z), MyBlock::ChainZ);
+        set(&mut chunk, 1, 4, z, MyBlock::ChainZ);
+        set(&mut chunk, 14, 4, z, MyBlock::ChainZ);
     }
 
     // Ladders on the +X face of clay pillars.
     for y in 1..6 {
-        chunk.set(UVec3::new(3, y, 2), MyBlock::Ladder);
-        chunk.set(UVec3::new(3, y, 13), MyBlock::Ladder);
+        set(&mut chunk, 3, y, 2, MyBlock::Ladder);
+        set(&mut chunk, 3, y, 13, MyBlock::Ladder);
     }
 
     // Rails on the floor along the slab path.
     for i in 3..13 {
-        chunk.set(UVec3::new(i, 1, 7), MyBlock::Rail);
+        set(&mut chunk, i, 1, 7, MyBlock::Rail);
     }
 
     // Glass windows between pillars (along edges).
     for i in 3..13 {
         for y in 1..5 {
-            chunk.set(UVec3::new(2, y, i), MyBlock::Glass);
-            chunk.set(UVec3::new(13, y, i), MyBlock::Glass);
-            chunk.set(UVec3::new(i, y, 2), MyBlock::Glass);
-            chunk.set(UVec3::new(i, y, 13), MyBlock::Glass);
+            set(&mut chunk, 2, y, i, MyBlock::Glass);
+            set(&mut chunk, 13, y, i, MyBlock::Glass);
+            set(&mut chunk, i, y, 2, MyBlock::Glass);
+            set(&mut chunk, i, y, 13, MyBlock::Glass);
         }
     }
 
     // Cobblestone half-slab path through the interior.
     for i in 3..13 {
-        chunk.set(UVec3::new(i, 1, 8), MyBlock::CobbleSlab);
-        chunk.set(UVec3::new(8, 1, i), MyBlock::CobbleSlab);
+        set(&mut chunk, i, 1, 8, MyBlock::CobbleSlab);
+        set(&mut chunk, 8, 1, i, MyBlock::CobbleSlab);
     }
 
     // Leaves canopy on top.
     for x in 1..15 {
         for z in 1..15 {
-            chunk.set(UVec3::new(x, 6, z), MyBlock::Leaves);
+            set(&mut chunk, x, 6, z, MyBlock::Leaves);
         }
     }
+
+    // Propagate light from lamp blocks through air/transparent blocks.
+    propagate_light(&mut chunk);
 
     chunk
 }
 
 /// Converts voxmesh quads into triangle vertices suitable for euc.
-/// Diagonal quads are tagged so the caller can render them two-sided.
-fn quads_to_vertices(quads: &Quads, chunk: &PaddedChunk<MyBlock>) -> Vec<Vertex> {
+/// Uses per-vertex AO and smooth light from the mesher, and applies
+/// the anisotropy fix for correct AO interpolation.
+fn quads_to_vertices(quads: &Quads<u8>, chunk: &PaddedChunk<LitBlock>) -> Vec<Vertex> {
     let mut verts = Vec::new();
 
     for qf in QuadFace::ALL {
         for quad in quads.get(qf) {
             let vp = quad.voxel_position(qf);
-            let block = *chunk.get_padded(vp + glam::UVec3::splat(PADDING as u32));
+            let lit_block = *chunk.get_padded(vp + glam::UVec3::splat(PADDING as u32));
 
-            let n = qf.normal(block.shape());
+            let n = qf.normal(lit_block.shape());
             let normal = Vec3::new(n.x, n.y, n.z);
 
-            let positions = quad.positions(qf, block.shape());
+            let positions = quad.positions(qf, lit_block.shape());
             let uvs = quad.texture_coordinates(qf, Axis::X, false);
 
-            // Two triangles per quad: (0,1,2) and (0,2,3).
-            let two_sided = qf.is_diagonal() || matches!(block.shape(), Shape::Facade(_));
-            let atlas_off = atlas_u_offset(block, qf);
+            let two_sided = qf.is_diagonal() || matches!(lit_block.shape(), Shape::Facade(_));
+            let atlas_off = atlas_u_offset(lit_block.block, qf);
+
             let make_vert = |i: usize| Vertex {
                 pos: Vec4::new(positions[i].x, positions[i].y, positions[i].z, 1.0),
                 uv: Vec2::new(uvs[i].x, uvs[i].y),
                 normal,
-                block,
+                ao: quad.ao[i] as f32 / 3.0,
+                smooth_light: quad.light[i] as f32 / 15.0,
+                block: lit_block.block,
                 atlas_offset: atlas_off,
                 two_sided,
             };
 
-            verts.push(make_vert(0));
-            verts.push(make_vert(1));
-            verts.push(make_vert(2));
-
-            verts.push(make_vert(0));
-            verts.push(make_vert(2));
-            verts.push(make_vert(3));
+            // Use anisotropy-corrected indices for proper AO interpolation.
+            let indices = quad.indices_ao(0);
+            for &idx in &indices {
+                verts.push(make_vert(idx as usize));
+            }
         }
     }
 
@@ -505,6 +629,7 @@ fn main() {
                         | MyBlock::Clay
                         | MyBlock::Debug
                         | MyBlock::Cactus
+                        | MyBlock::Lamp
                 )
         })
         .collect();

@@ -13,10 +13,11 @@ Voxel greedy meshing library
   - Positions
   - Normals
   - Texture coordinates
+- Mesh a single block or a chunk
 
 ## Assumptions
 
-- 16x16x16 chunks with 1 block of padding
+- 16x16x16 block chunks with 1 block of padding on each side
 - OpenGL coordinate system
 - Blocks are 1 unit wide
 - Sub-block positions and sizes are in units of 1/16

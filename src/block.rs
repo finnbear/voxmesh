@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 
 use crate::face::Face;
+use crate::light::Light;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CullMode<T: PartialEq = ()> {
@@ -73,6 +74,21 @@ pub trait Block: Copy + PartialEq + Debug {
     /// This does not replace `Self: PartialEq` for greedy meshing.
     type TransparentGroup: Copy + PartialEq + Debug;
 
+    /// Per-vertex light type for smooth lighting. Set to `()` (the
+    /// default) to disable lighting and AO at zero cost.
+    type Light: Light = ();
+
     fn shape(&self) -> Shape;
     fn cull_mode(&self) -> CullMode<Self::TransparentGroup>;
+
+    /// Whether this block occludes ambient occlusion for neighboring
+    /// vertices. Defaults to `false`.
+    fn ao_opaque(&self) -> bool {
+        false
+    }
+
+    /// The light value of this voxel for smooth per-vertex lighting.
+    fn light(&self) -> Self::Light {
+        Self::Light::default()
+    }
 }

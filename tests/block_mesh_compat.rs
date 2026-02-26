@@ -109,7 +109,7 @@ fn single_block_indices_match_block_mesh() {
         let bm_indices = oriented_face.quad_mesh_indices(0);
 
         // voxmesh indices (rebased to 0).
-        let vm_indices = Quad::indices(0);
+        let vm_indices = Quad::<()>::indices(0);
 
         // Remap block-mesh indices into voxmesh vertex space.
         let bm_indices_in_vm: [u32; 6] = bm_indices.map(|i| bm_to_vm[i as usize] as u32);
