@@ -378,27 +378,32 @@ fn mask_entry_for_shape<B: Block>(
                 light: Default::default(),
             });
         }
-        Shape::WholeBlock | Shape::Inset(_) => {
-            let normal_pos = if let Shape::Inset(n) = block.shape() {
-                // Side faces are inset, top/bottom are flush.
-                if face.axis() == Axis::Y {
-                    if face.is_positive() {
-                        ft
-                    } else {
-                        0
-                    }
-                } else {
-                    if face.is_positive() {
-                        ft - n as u8
-                    } else {
-                        n as u8
-                    }
-                }
-            } else {
+        Shape::WholeBlock => {
+            let normal_pos = if face.is_positive() { ft } else { 0 };
+            Some(MaskEntry {
+                block: *block,
+                normal_pos,
+                u_intra_offset: 0,
+                u_intra_extent: ft,
+                v_intra_offset: 0,
+                v_intra_extent: ft,
+                ao: [3; 4],
+                light: Default::default(),
+            })
+        }
+        Shape::Inset(n) => {
+            // Side faces are inset, top/bottom are flush.
+            let normal_pos = if face.axis() == Axis::Y {
                 if face.is_positive() {
                     ft
                 } else {
                     0
+                }
+            } else {
+                if face.is_positive() {
+                    ft - n as u8
+                } else {
+                    n as u8
                 }
             };
             Some(MaskEntry {
@@ -927,46 +932,50 @@ pub fn mesh_chunk_into<B: Block>(
                     let (block, neighbor) =
                         unsafe { (data.get_unchecked(idx), data.get_unchecked(n_idx)) };
 
-                    let mut entry = if !block.cull_mode().is_renderable() {
-                        None
-                    } else if matches!(block.shape(), Shape::WholeBlock) {
-                        if is_culled_at_boundary(block, neighbor, face) {
-                            None
-                        } else {
-                            // WholeBlock fast path: normal_pos is constant
-                            // for the entire face, skip shape dispatch.
-                            Some(MaskEntry {
-                                block: *block,
-                                normal_pos: whole_normal_pos,
-                                u_intra_offset: 0,
-                                u_intra_extent: ft,
-                                v_intra_offset: 0,
-                                v_intra_extent: ft,
-                                ao: [3; 4],
-                                light: Default::default(),
-                            })
-                        }
-                    } else if matches!(block.shape(), Shape::Cross(_)) {
-                        // Cross blocks are handled in a separate pass.
-                        None
-                    } else if matches!(block.shape(), Shape::Facade(_)) {
-                        // Facade quads are offset 1/16 inward, never at
-                        // the block boundary, so skip neighbor culling.
-                        mask_entry_for_shape(block, face, u_idx, v_idx)
-                    } else if matches!(block.shape(), Shape::Inset(_)) {
-                        if face.axis() == Axis::Y {
-                            // Top/bottom at boundary, normal culling.
+                    let shape = block.shape();
+                    let is_facade = matches!(shape, Shape::Facade(_));
+
+                    let mut entry = match shape {
+                        _ if !block.cull_mode().is_renderable() => None,
+                        Shape::WholeBlock => {
                             if is_culled_at_boundary(block, neighbor, face) {
                                 None
                             } else {
+                                // WholeBlock fast path: normal_pos is constant
+                                // for the entire face, skip shape dispatch.
+                                Some(MaskEntry {
+                                    block: *block,
+                                    normal_pos: whole_normal_pos,
+                                    u_intra_offset: 0,
+                                    u_intra_extent: ft,
+                                    v_intra_offset: 0,
+                                    v_intra_extent: ft,
+                                    ao: [3; 4],
+                                    light: Default::default(),
+                                })
+                            }
+                        }
+                        // Cross blocks are handled in a separate pass.
+                        Shape::Cross(_) => None,
+                        // Facade quads are offset 1/16 inward, never at
+                        // the block boundary, so skip neighbor culling.
+                        Shape::Facade(_) => mask_entry_for_shape(block, face, u_idx, v_idx),
+                        Shape::Inset(_) => {
+                            if face.axis() == Axis::Y {
+                                // Top/bottom at boundary, normal culling.
+                                if is_culled_at_boundary(block, neighbor, face) {
+                                    None
+                                } else {
+                                    mask_entry_for_shape(block, face, u_idx, v_idx)
+                                }
+                            } else {
+                                // Side faces are inset, no neighbor culling.
                                 mask_entry_for_shape(block, face, u_idx, v_idx)
                             }
-                        } else {
-                            // Side faces are inset, no neighbor culling.
-                            mask_entry_for_shape(block, face, u_idx, v_idx)
                         }
-                    } else {
-                        compute_slab_mask_entry(block, neighbor, face, u_idx, v_idx)
+                        Shape::Slab(_) => {
+                            compute_slab_mask_entry(block, neighbor, face, u_idx, v_idx)
+                        }
                     };
 
                     // Compute AO and smooth light for visible faces.
@@ -975,11 +984,7 @@ pub fn mesh_chunk_into<B: Block>(
                             // Facades are inset into the block, so sample
                             // AO/light at the block's own plane rather
                             // than the neighbor's.
-                            let sample_idx = if matches!(block.shape(), Shape::Facade(_)) {
-                                idx
-                            } else {
-                                n_idx
-                            };
+                            let sample_idx = if is_facade { idx } else { n_idx };
                             let (ao, light) = compute_ao_light(
                                 data,
                                 sample_idx,
