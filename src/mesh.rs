@@ -336,7 +336,12 @@ fn is_culled_at_boundary<B: Block>(block: &B, neighbor: &B, face: Face) -> bool 
     }
     match (block.cull_mode(), neighbor.cull_mode()) {
         (_, CullMode::Opaque) => true,
-        (CullMode::TransparentMerged(a), CullMode::TransparentMerged(b)) => a == b,
+        (CullMode::TransparentMerged(a), CullMode::TransparentMerged(b)) => {
+            // Equal groups: cull both faces (standard merge).
+            // Different groups: cull the negative face so only one
+            // face is emitted per boundary, avoiding z-fighting.
+            a == b || !face.is_positive()
+        }
         _ => false,
     }
 }
