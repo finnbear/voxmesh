@@ -933,8 +933,16 @@ pub fn greedy_mesh_into<B: Block>(chunk: &PaddedChunk<B>, quads: &mut Quads<B::L
                     // Compute AO and smooth light for visible faces.
                     if B::Light::ENABLED {
                         if let Some(ref mut e) = entry {
+                            // Facades are inset into the block, so sample
+                            // AO/light at the block's own plane rather
+                            // than the neighbor's.
+                            let sample_idx = if matches!(block.shape(), Shape::Facade(_)) {
+                                idx
+                            } else {
+                                n_idx
+                            };
                             let (ao, light) =
-                                compute_ao_light(data, n_idx, u_stride as isize, v_stride as isize);
+                                compute_ao_light(data, sample_idx, u_stride as isize, v_stride as isize);
                             e.ao = ao;
                             e.light = light;
                         }
