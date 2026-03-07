@@ -172,15 +172,16 @@ impl<L: Light> Quad<L> {
     ) -> [Vec2; 4] {
         match face.into() {
             Face::Aligned(face) => {
-                let ft = FULL_THICKNESS as f32;
-                let scale = 1.0 / ft;
+                let scale = 1.0 / FULL_THICKNESS as f32;
                 let (_, u_idx, v_idx) = face_axis_indices(face);
                 let u_off = (self.origin_padded[u_idx] % FULL_THICKNESS) as f32 * scale;
                 let v_off = (self.origin_padded[v_idx] % FULL_THICKNESS) as f32 * scale;
                 let u_size = self.size.x as f32 * scale;
                 let v_size = self.size.y as f32 * scale;
-                let u_extent = u_off + u_size;
-                let v_extent = v_off + v_size;
+                // Flip mirrors about the full block (1.0) for sub-block
+                // quads, or about the merged extent for merged quads.
+                let u_extent = 1.0f32.max(u_size);
+                let v_extent = 1.0f32.max(v_size);
 
                 let flip_u = if face.is_positive() {
                     face.axis() == u_flip_face

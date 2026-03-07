@@ -9,8 +9,12 @@ pub enum TestBlock {
     Dirt,
     Glass,
     Leaves,
-    UpperSlab, // PosY slab, thickness 8
-    LowerSlab, // NegY slab, thickness 8
+    UpperSlab,  // PosY slab, thickness 8
+    LowerSlab,  // NegY slab, thickness 8
+    PosXSlab,   // PosX slab, thickness 8
+    NegXSlab,   // NegX slab, thickness 8
+    PosZSlab,   // PosZ slab, thickness 8
+    NegZSlab,   // NegZ slab, thickness 8
     SugarCane, // Cross(NegY, 0), diagonal billboard, no stretch
     Cobweb,    // Cross(NegY, 4), diagonal billboard, stretched
     Ladder,    // Facade(PosX), flat face on +X side
@@ -31,6 +35,22 @@ impl Block for TestBlock {
             }),
             TestBlock::LowerSlab => Shape::Slab(SlabInfo {
                 face: AlignedFace::NegY,
+                thickness: 8,
+            }),
+            TestBlock::PosXSlab => Shape::Slab(SlabInfo {
+                face: AlignedFace::PosX,
+                thickness: 8,
+            }),
+            TestBlock::NegXSlab => Shape::Slab(SlabInfo {
+                face: AlignedFace::NegX,
+                thickness: 8,
+            }),
+            TestBlock::PosZSlab => Shape::Slab(SlabInfo {
+                face: AlignedFace::PosZ,
+                thickness: 8,
+            }),
+            TestBlock::NegZSlab => Shape::Slab(SlabInfo {
+                face: AlignedFace::NegZ,
                 thickness: 8,
             }),
             TestBlock::SugarCane => Shape::Cross(CrossInfo {
