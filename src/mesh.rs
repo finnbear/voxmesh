@@ -542,13 +542,8 @@ fn compute_ao_light<B: Block>(
     n_idx: usize,
     u_stride: isize,
     v_stride: isize,
-    face: AlignedFace,
+    ao_face: AlignedFace,
 ) -> ([u8; 4], [<B::Light as Light>::Average; 4]) {
-    // All neighbors are in the plane one step along the face normal.
-    // The face of each neighbor facing toward the lit surface is
-    // `face.opposite()`.
-    let ao_face = face.opposite();
-
     // Load all 9 neighbors in the face-normal plane once.
     let get = |du: isize, dv: isize| -> &B {
         unsafe { data.get_unchecked((n_idx as isize + du + dv) as usize) }
@@ -983,16 +978,24 @@ pub fn mesh_chunk_into<B: Block>(
                         if let Some(ref mut e) = entry {
                             // Faces inset into the block sample AO/light
                             // at the block's own plane rather than the
-                            // neighbor's.
-                            let is_inset_face = is_facade
-                                || matches!(shape, Shape::Slab(info) if face.axis() == info.face.axis() && face != info.face);
-                            let sample_idx = if is_inset_face { idx } else { n_idx };
+                            // neighbor's, and check the inset direction
+                            // for occlusion instead of the opposite.
+                            let is_slab_inset = matches!(shape, Shape::Slab(info) if face.axis() == info.face.axis() && face != info.face);
+                            let sample_idx = if is_facade || is_slab_inset {
+                                idx
+                            } else {
+                                n_idx
+                            };
+                            // Slab inset faces check occlusion on the
+                            // inset direction since neighbors at the same
+                            // level don't protrude past the surface.
+                            let ao_face = if is_slab_inset { face } else { face.opposite() };
                             let (ao, light) = compute_ao_light(
                                 data,
                                 sample_idx,
                                 u_stride as isize,
                                 v_stride as isize,
-                                face,
+                                ao_face,
                             );
                             e.ao = ao;
                             e.light = light;
