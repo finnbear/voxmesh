@@ -981,10 +981,12 @@ pub fn mesh_chunk_into<B: Block>(
                     // Compute AO and smooth light for visible faces.
                     if B::Light::ENABLED {
                         if let Some(ref mut e) = entry {
-                            // Facades are inset into the block, so sample
-                            // AO/light at the block's own plane rather
-                            // than the neighbor's.
-                            let sample_idx = if is_facade { idx } else { n_idx };
+                            // Faces inset into the block sample AO/light
+                            // at the block's own plane rather than the
+                            // neighbor's.
+                            let is_inset_face = is_facade
+                                || matches!(shape, Shape::Slab(info) if face.axis() == info.face.axis() && face != info.face);
+                            let sample_idx = if is_inset_face { idx } else { n_idx };
                             let (ao, light) = compute_ao_light(
                                 data,
                                 sample_idx,
