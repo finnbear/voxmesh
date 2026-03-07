@@ -172,9 +172,15 @@ impl<L: Light> Quad<L> {
     ) -> [Vec2; 4] {
         match face.into() {
             Face::Aligned(face) => {
-                let scale = 1.0 / FULL_THICKNESS as f32;
+                let ft = FULL_THICKNESS as f32;
+                let scale = 1.0 / ft;
+                let (_, u_idx, v_idx) = face_axis_indices(face);
+                let u_off = (self.origin_padded[u_idx] % FULL_THICKNESS) as f32 * scale;
+                let v_off = (self.origin_padded[v_idx] % FULL_THICKNESS) as f32 * scale;
                 let u_size = self.size.x as f32 * scale;
                 let v_size = self.size.y as f32 * scale;
+                let u_extent = u_off + u_size;
+                let v_extent = v_off + v_size;
 
                 let flip_u = if face.is_positive() {
                     face.axis() == u_flip_face
@@ -184,24 +190,32 @@ impl<L: Light> Quad<L> {
 
                 let raw = if face.tangent_cross_positive() {
                     [
-                        Vec2::new(0.0, 0.0),
-                        Vec2::new(u_size, 0.0),
-                        Vec2::new(u_size, v_size),
-                        Vec2::new(0.0, v_size),
+                        Vec2::new(u_off, v_off),
+                        Vec2::new(u_off + u_size, v_off),
+                        Vec2::new(u_off + u_size, v_off + v_size),
+                        Vec2::new(u_off, v_off + v_size),
                     ]
                 } else {
                     [
-                        Vec2::new(0.0, 0.0),
-                        Vec2::new(0.0, v_size),
-                        Vec2::new(u_size, v_size),
-                        Vec2::new(u_size, 0.0),
+                        Vec2::new(u_off, v_off),
+                        Vec2::new(u_off, v_off + v_size),
+                        Vec2::new(u_off + u_size, v_off + v_size),
+                        Vec2::new(u_off + u_size, v_off),
                     ]
                 };
 
                 raw.map(|uv| {
                     Vec2::new(
-                        if flip_u { u_size - uv.x } else { uv.x },
-                        if flip_v { v_size - uv.y } else { uv.y },
+                        if flip_u {
+                            u_extent - uv.x + u_off
+                        } else {
+                            uv.x
+                        },
+                        if flip_v {
+                            v_extent - uv.y + v_off
+                        } else {
+                            uv.y
+                        },
                     )
                 })
             }
