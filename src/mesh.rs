@@ -206,16 +206,8 @@ impl<L: Light> Quad<L> {
 
                 raw.map(|uv| {
                     Vec2::new(
-                        if flip_u {
-                            u_extent - uv.x + u_off
-                        } else {
-                            uv.x
-                        },
-                        if flip_v {
-                            v_extent - uv.y + v_off
-                        } else {
-                            uv.y
-                        },
+                        if flip_u { u_extent - uv.x } else { uv.x },
+                        if flip_v { v_extent - uv.y } else { uv.y },
                     )
                 })
             }
