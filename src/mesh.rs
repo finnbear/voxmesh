@@ -612,11 +612,11 @@ fn compute_ao_light<B: Block>(
                         corner_l: B::Light|
      -> <B::Light as Light>::Average {
         if s1_opaque && s2_opaque {
-            B::Light::average(&[center_l])
+            B::Light::average(&[center_l, center_l, center_l, center_l])
         } else if s1_opaque {
-            B::Light::average(&[center_l, s2_l])
+            B::Light::average(&[center_l, center_l, s2_l, center_l])
         } else if s2_opaque {
-            B::Light::average(&[center_l, s1_l])
+            B::Light::average(&[center_l, s1_l, center_l, center_l])
         } else {
             B::Light::average(&[center_l, s1_l, s2_l, corner_l])
         }
