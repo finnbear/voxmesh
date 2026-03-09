@@ -527,13 +527,6 @@ fn shape_ao_opaque<B: Block>(block: &B, face: AlignedFace) -> bool {
     block.ao_opaque() && shape_fills_face(block, face)
 }
 
-/// Whether a block blocks light passage on the given face: material is
-/// fully opaque and shape fills that face.
-#[inline]
-fn shape_light_opaque<B: Block>(block: &B, face: AlignedFace) -> bool {
-    matches!(block.cull_mode(), CullMode::Opaque) && shape_fills_face(block, face)
-}
-
 /// Computes per-vertex AO and smooth light for a face cell.
 ///
 /// `data` is the padded chunk array. `n_idx` is the linear index of the
@@ -595,67 +588,18 @@ fn compute_ao_light<B: Block>(
 
     let ao = [ao0, ao1, ao2, ao3];
 
-    // Light: does the block block light passage? Only fully opaque
-    // materials that fill the face prevent light from contributing.
-    let l_neg_u = shape_light_opaque(neg_u, ao_face);
-    let l_pos_u = shape_light_opaque(pos_u, ao_face);
-    let l_neg_v = shape_light_opaque(neg_v, ao_face);
-    let l_pos_v = shape_light_opaque(pos_v, ao_face);
-
-    // Smooth light: each vertex averages light from up to 4 voxels,
-    // excluding directions blocked by opaque geometry.
-    let vertex_light = |s1_opaque: bool,
-                        s2_opaque: bool,
-                        center_l: B::Light,
-                        s1_l: B::Light,
-                        s2_l: B::Light,
-                        corner_l: B::Light|
-     -> <B::Light as Light>::Average {
-        if s1_opaque && s2_opaque {
-            B::Light::average(&[center_l, center_l, center_l, center_l])
-        } else if s1_opaque {
-            B::Light::average(&[center_l, center_l, s2_l, center_l])
-        } else if s2_opaque {
-            B::Light::average(&[center_l, s1_l, center_l, center_l])
-        } else {
-            B::Light::average(&[center_l, s1_l, s2_l, corner_l])
-        }
-    };
-
+    // Smooth light: each vertex averages light from the 4 surrounding
+    // voxels unconditionally. Unlike AO, we do not exclude opaque
+    // neighbors — their stored light values already reflect blockage,
+    // and excluding them would cause different blocks sharing a vertex
+    // to compute different averages (since one block's "side" neighbor
+    // is another's "corner"), producing visible discontinuities.
     let cl = center.light();
     let light = [
-        vertex_light(
-            l_neg_u,
-            l_neg_v,
-            cl,
-            neg_u.light(),
-            neg_v.light(),
-            neg_u_neg_v.light(),
-        ),
-        vertex_light(
-            l_pos_u,
-            l_neg_v,
-            cl,
-            pos_u.light(),
-            neg_v.light(),
-            pos_u_neg_v.light(),
-        ),
-        vertex_light(
-            l_pos_u,
-            l_pos_v,
-            cl,
-            pos_u.light(),
-            pos_v.light(),
-            pos_u_pos_v.light(),
-        ),
-        vertex_light(
-            l_neg_u,
-            l_pos_v,
-            cl,
-            neg_u.light(),
-            pos_v.light(),
-            neg_u_pos_v.light(),
-        ),
+        B::Light::average(&[cl, neg_u.light(), neg_v.light(), neg_u_neg_v.light()]),
+        B::Light::average(&[cl, pos_u.light(), neg_v.light(), pos_u_neg_v.light()]),
+        B::Light::average(&[cl, pos_u.light(), pos_v.light(), pos_u_pos_v.light()]),
+        B::Light::average(&[cl, neg_u.light(), pos_v.light(), neg_u_pos_v.light()]),
     ];
 
     (ao, light)

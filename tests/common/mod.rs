@@ -9,12 +9,12 @@ pub enum TestBlock {
     Dirt,
     Glass,
     Leaves,
-    UpperSlab,  // PosY slab, thickness 8
-    LowerSlab,  // NegY slab, thickness 8
-    PosXSlab,   // PosX slab, thickness 8
-    NegXSlab,   // NegX slab, thickness 8
-    PosZSlab,   // PosZ slab, thickness 8
-    NegZSlab,   // NegZ slab, thickness 8
+    UpperSlab, // PosY slab, thickness 8
+    LowerSlab, // NegY slab, thickness 8
+    PosXSlab,  // PosX slab, thickness 8
+    NegXSlab,  // NegX slab, thickness 8
+    PosZSlab,  // PosZ slab, thickness 8
+    NegZSlab,  // NegZ slab, thickness 8
     SugarCane, // Cross(NegY, 0), diagonal billboard, no stretch
     Cobweb,    // Cross(NegY, 4), diagonal billboard, stretched
     Ladder,    // Facade(PosX), flat face on +X side

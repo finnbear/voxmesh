@@ -98,24 +98,17 @@ fn slab_side_face_uvs_match_whole_block() {
 
             for &u_flip in &[Axis::X, Axis::Y, Axis::Z] {
                 for &flip_v in &[false, true] {
-                    let stone_uvs = stone_q.faces[face.index()][0]
-                        .texture_coordinates(face, u_flip, flip_v);
-                    let stone_pos = stone_q.faces[face.index()][0]
-                        .positions(face, Shape::WholeBlock);
+                    let stone_uvs =
+                        stone_q.faces[face.index()][0].texture_coordinates(face, u_flip, flip_v);
+                    let stone_pos =
+                        stone_q.faces[face.index()][0].positions(face, Shape::WholeBlock);
 
-                    let slab_uvs = slab_quads[0]
-                        .texture_coordinates(face, u_flip, flip_v);
-                    let slab_pos = slab_quads[0]
-                        .positions(face, slab_block.shape());
+                    let slab_uvs = slab_quads[0].texture_coordinates(face, u_flip, flip_v);
+                    let slab_pos = slab_quads[0].positions(face, slab_block.shape());
 
-                    for (vi, (slab_p, slab_uv)) in
-                        slab_pos.iter().zip(slab_uvs.iter()).enumerate()
+                    for (vi, (slab_p, slab_uv)) in slab_pos.iter().zip(slab_uvs.iter()).enumerate()
                     {
-                        let expected = bilinear_uv(
-                            slab_p,
-                            &stone_pos,
-                            &stone_uvs,
-                        );
+                        let expected = bilinear_uv(slab_p, &stone_pos, &stone_uvs);
                         let diff = (*slab_uv - expected).length();
                         assert!(
                             diff < 1e-5,
@@ -131,11 +124,7 @@ fn slab_side_face_uvs_match_whole_block() {
 }
 
 /// Bilinear interpolation of UV from an axis-aligned quad.
-fn bilinear_uv(
-    p: &glam::Vec3,
-    positions: &[glam::Vec3; 4],
-    uvs: &[glam::Vec2; 4],
-) -> glam::Vec2 {
+fn bilinear_uv(p: &glam::Vec3, positions: &[glam::Vec3; 4], uvs: &[glam::Vec2; 4]) -> glam::Vec2 {
     let mut min_p = positions[0];
     let mut max_p = positions[0];
     for pos in &positions[1..] {
