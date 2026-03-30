@@ -8,7 +8,7 @@ repository = "https://github.com/finnbear/voxmesh/"
 edition = "2021"
 
 [dependencies]
-glam = "0.22.0"
+glam = ">=0.22"
 
 [dev-dependencies]
 block-mesh = "0.2"
