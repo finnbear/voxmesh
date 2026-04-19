@@ -25,7 +25,8 @@ Voxel greedy meshing library.
 
 ## Assumptions
 
-- 16x16x16 block chunks with 1 block of padding on each side
+- Requires `nightly` Rust for the `generic_const_exprs` feature
+- cubic chunks with 1 block of padding on each side
 - OpenGL coordinate system
 - Blocks are 1 unit wide
 - Sub-block positions and sizes are in units of 1/16

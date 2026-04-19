@@ -1,4 +1,6 @@
 #![feature(test)]
+#![feature(generic_const_exprs)]
+#![allow(incomplete_features)]
 
 extern crate test;
 
@@ -21,9 +23,11 @@ enum VmBlock {
 impl Block for VmBlock {
     type TransparentGroup = ();
 
+    #[inline(always)]
     fn shape(&self) -> Shape {
         Shape::WholeBlock
     }
+    #[inline(always)]
     fn cull_mode(&self) -> CullMode {
         match self {
             VmBlock::Air => CullMode::Empty,
@@ -61,11 +65,11 @@ type BmPaddedShape = ConstShape3u32<18, 18, 18>;
 // Helpers to fill chunks with the same pattern for both libraries
 
 /// Solid 16x16x16 chunk, worst case for face count (only exterior faces survive).
-fn vm_chunk_solid() -> PaddedChunk<VmBlock> {
-    let mut chunk = PaddedChunk::new_filled(VmBlock::Air);
-    for x in 0..CHUNK_SIZE as u32 {
-        for y in 0..CHUNK_SIZE as u32 {
-            for z in 0..CHUNK_SIZE as u32 {
+fn vm_chunk_solid() -> PaddedChunk16<VmBlock> {
+    let mut chunk = PaddedChunk16::new_filled(VmBlock::Air);
+    for x in 0..ChunkShape16::SIZE as u32 {
+        for y in 0..ChunkShape16::SIZE as u32 {
+            for z in 0..ChunkShape16::SIZE as u32 {
                 chunk.set(glam::UVec3::new(x, y, z), VmBlock::Stone);
             }
         }
@@ -86,11 +90,11 @@ fn bm_chunk_solid() -> [BmVoxel; BmPaddedShape::SIZE as usize] {
 }
 
 /// Checkerboard pattern, worst case for merging (no two adjacent same-type blocks).
-fn vm_chunk_checkerboard() -> PaddedChunk<VmBlock> {
-    let mut chunk = PaddedChunk::new_filled(VmBlock::Air);
-    for x in 0..CHUNK_SIZE as u32 {
-        for y in 0..CHUNK_SIZE as u32 {
-            for z in 0..CHUNK_SIZE as u32 {
+fn vm_chunk_checkerboard() -> PaddedChunk16<VmBlock> {
+    let mut chunk = PaddedChunk16::new_filled(VmBlock::Air);
+    for x in 0..ChunkShape16::SIZE as u32 {
+        for y in 0..ChunkShape16::SIZE as u32 {
+            for z in 0..ChunkShape16::SIZE as u32 {
                 if (x + y + z) % 2 == 0 {
                     chunk.set(glam::UVec3::new(x, y, z), VmBlock::Stone);
                 }
@@ -116,11 +120,11 @@ fn bm_chunk_checkerboard() -> [BmVoxel; BmPaddedShape::SIZE as usize] {
 }
 
 /// Hollow shell (floor + walls + ceiling), interior is air.
-fn vm_chunk_shell() -> PaddedChunk<VmBlock> {
-    let mut chunk = PaddedChunk::new_filled(VmBlock::Air);
-    for x in 0..CHUNK_SIZE as u32 {
-        for y in 0..CHUNK_SIZE as u32 {
-            for z in 0..CHUNK_SIZE as u32 {
+fn vm_chunk_shell() -> PaddedChunk16<VmBlock> {
+    let mut chunk = PaddedChunk16::new_filled(VmBlock::Air);
+    for x in 0..ChunkShape16::SIZE as u32 {
+        for y in 0..ChunkShape16::SIZE as u32 {
+            for z in 0..ChunkShape16::SIZE as u32 {
                 if x == 0 || x == 15 || y == 0 || y == 15 || z == 0 || z == 15 {
                     chunk.set(glam::UVec3::new(x, y, z), VmBlock::Stone);
                 }
@@ -193,7 +197,7 @@ fn bench_block_mesh_vertices(b: &mut Bencher, voxels: &[BmVoxel; BmPaddedShape::
 
 // voxmesh runners
 
-fn bench_voxmesh(b: &mut Bencher, chunk: &PaddedChunk<VmBlock>) {
+fn bench_voxmesh(b: &mut Bencher, chunk: &PaddedChunk16<VmBlock>) {
     let mut quads = Quads::new();
     b.iter(|| {
         mesh_chunk_into(test::black_box(chunk), true, &mut quads);
@@ -201,7 +205,7 @@ fn bench_voxmesh(b: &mut Bencher, chunk: &PaddedChunk<VmBlock>) {
     });
 }
 
-fn bench_voxmesh_vertices(b: &mut Bencher, chunk: &PaddedChunk<VmBlock>) {
+fn bench_voxmesh_vertices(b: &mut Bencher, chunk: &PaddedChunk16<VmBlock>) {
     let mut quads = Quads::new();
     b.iter(|| {
         mesh_chunk_into(test::black_box(chunk), true, &mut quads);

@@ -1,3 +1,6 @@
+#![feature(generic_const_exprs)]
+#![allow(incomplete_features)]
+
 mod common;
 
 use common::*;
@@ -42,7 +45,7 @@ fn facade_negy_produces_one_quad() {
 
 #[test]
 fn facade_mesh_block_matches_mesh_chunk() {
-    let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
+    let mut chunk = PaddedChunk16::new_filled(TestBlock::Air);
     chunk.set(glam::UVec3::ZERO, TestBlock::Ladder);
     let from_chunk = mesh_chunk(&chunk, true);
     let from_block = mesh_block(&TestBlock::Ladder, ());

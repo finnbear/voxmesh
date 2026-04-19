@@ -1,7 +1,7 @@
 use glam::{UVec2, UVec3, Vec2, Vec3};
 
 use crate::block::{Block, CrossInfo, CullMode, Shape, FULL_THICKNESS};
-use crate::chunk::{PaddedChunk, CHUNK_SIZE, PADDED, PADDING};
+use crate::chunk::{ChunkShape, PaddedChunk, PADDING};
 use crate::face::{AlignedFace, Axis, DiagonalFace, Face};
 use crate::light::Light;
 
@@ -112,11 +112,7 @@ impl<L: Light> Quad<L> {
                 let merge_axis = info.face.axis().index();
                 let (cross_a, cross_b) = cross_axes(info.face.axis());
 
-                let origin = Vec3::new(
-                    self.origin_padded.x as f32 * scale - pad,
-                    self.origin_padded.y as f32 * scale - pad,
-                    self.origin_padded.z as f32 * scale - pad,
-                );
+                let origin = self.origin_padded.as_vec3() * scale - pad;
 
                 let base_merge = origin[merge_axis];
                 let height = self.size.y as f32 * scale;
@@ -299,6 +295,7 @@ fn cross_axes(axis: Axis) -> (usize, usize) {
 
 /// Returns the (normal_idx, u_idx, v_idx) axis indices for a face, matching
 /// the tangent convention in [`face_tangents`].
+#[inline]
 fn face_axis_indices(face: AlignedFace) -> (usize, usize, usize) {
     match face {
         AlignedFace::PosX | AlignedFace::NegX => (0, 2, 1), // normal=X, u=Z, v=Y
@@ -311,6 +308,7 @@ fn face_axis_indices(face: AlignedFace) -> (usize, usize, usize) {
 /// shared boundary. For whole-blocks this is trivial. For slabs, checks
 /// whether the neighbor occupies at least the same sub-region along the
 /// slab axis.
+#[inline]
 fn neighbor_covers_face_region<B: Block>(block: &B, neighbor: &B, face: AlignedFace) -> bool {
     match neighbor.shape() {
         Shape::WholeBlock => true,
@@ -340,6 +338,7 @@ fn neighbor_covers_face_region<B: Block>(block: &B, neighbor: &B, face: AlignedF
 
 /// Whether the current block's face is culled by the given neighbor.
 /// Only valid for faces at the block boundary (flush or side).
+#[inline]
 fn is_culled_at_boundary<B: Block>(block: &B, neighbor: &B, face: AlignedFace) -> bool {
     if !neighbor_covers_face_region(block, neighbor, face) {
         return false;
@@ -660,7 +659,14 @@ impl<L: Light> Default for Quads<L> {
 ///
 /// When `greedy` is true, coplanar identical faces are merged into
 /// larger quads (fewer draw calls, but hides per-block boundaries).
-pub fn mesh_chunk<B: Block>(chunk: &PaddedChunk<B>, greedy: bool) -> Quads<B::Light> {
+pub fn mesh_chunk<B: Block, S: ChunkShape>(
+    chunk: &PaddedChunk<B, S>,
+    greedy: bool,
+) -> Quads<B::Light>
+where
+    [(); S::PADDED_VOLUME]:,
+    [(); S::SIZE]:,
+{
     let mut quads = Quads::new();
     mesh_chunk_into(chunk, greedy, &mut quads);
     quads
@@ -670,13 +676,13 @@ pub fn mesh_chunk<B: Block>(chunk: &PaddedChunk<B>, greedy: bool) -> Quads<B::Li
 /// the padded chunk array, matching the tangent convention in
 /// [`face_tangents`].
 #[inline]
-fn face_strides(face: AlignedFace) -> (usize, usize, usize) {
-    const P: usize = PADDED;
-    const P2: usize = PADDED * PADDED;
+fn face_strides(face: AlignedFace, padded: usize) -> (usize, usize, usize) {
+    let p = padded;
+    let p2 = padded * padded;
     match face {
-        AlignedFace::PosX | AlignedFace::NegX => (1, P2, P), // normal=X, u=Z, v=Y
-        AlignedFace::PosY | AlignedFace::NegY => (P, P2, 1), // normal=Y, u=Z, v=X
-        AlignedFace::PosZ | AlignedFace::NegZ => (P2, 1, P), // normal=Z, u=X, v=Y
+        AlignedFace::PosX | AlignedFace::NegX => (1, p2, p), // normal=X, u=Z, v=Y
+        AlignedFace::PosY | AlignedFace::NegY => (p, p2, 1), // normal=Y, u=Z, v=X
+        AlignedFace::PosZ | AlignedFace::NegZ => (p2, 1, p), // normal=Z, u=X, v=Y
     }
 }
 
@@ -836,23 +842,25 @@ pub fn mesh_block_into<B: Block>(
 ///
 /// The buffer is [`reset`](Quads::reset) before meshing, so previous
 /// contents are cleared but backing allocations are preserved.
-pub fn mesh_chunk_into<B: Block>(
-    chunk: &PaddedChunk<B>,
+pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
+    chunk: &PaddedChunk<B, S>,
     greedy: bool,
     quads: &mut Quads<B::Light>,
-) {
+) where
+    [(); S::PADDED_VOLUME]:,
+    [(); S::SIZE]:,
+{
     quads.reset();
     let ft = FULL_THICKNESS as u8;
     let data = &chunk.data;
 
     // Mask is hoisted outside the layer loop. The build phase overwrites
     // every cell unconditionally so previous values do not matter.
-    let mut mask: [[Option<MaskEntry<B>>; CHUNK_SIZE]; CHUNK_SIZE] =
-        [[None; CHUNK_SIZE]; CHUNK_SIZE];
+    let mut mask: [[Option<MaskEntry<B>>; S::SIZE]; S::SIZE] = [[None; S::SIZE]; S::SIZE];
 
     for face in AlignedFace::ALL {
         let (normal_idx, u_idx, v_idx) = face_axis_indices(face);
-        let (n_stride, u_stride, v_stride) = face_strides(face);
+        let (n_stride, u_stride, v_stride) = face_strides(face, S::PADDED);
         let neighbor_stride: isize = if face.is_positive() {
             n_stride as isize
         } else {
@@ -860,14 +868,14 @@ pub fn mesh_chunk_into<B: Block>(
         };
         let whole_normal_pos: u8 = if face.is_positive() { ft } else { 0 };
 
-        for layer in 0..CHUNK_SIZE {
+        for layer in 0..S::SIZE {
             let layer_base = (PADDING + layer) * n_stride + PADDING * u_stride + PADDING * v_stride;
 
             // Build the 2D mask for this layer.
             let mut v_base = layer_base;
-            for v in 0..CHUNK_SIZE {
+            for v in 0..S::SIZE {
                 let mut idx = v_base;
-                for u in 0..CHUNK_SIZE {
+                for u in 0..S::SIZE {
                     debug_assert!(idx < data.len());
                     let n_idx = (idx as isize + neighbor_stride) as usize;
                     debug_assert!(n_idx < data.len());
@@ -961,9 +969,9 @@ pub fn mesh_chunk_into<B: Block>(
             }
 
             // Emit phase (with optional greedy merging).
-            for v in 0..CHUNK_SIZE {
+            for v in 0..S::SIZE {
                 let mut u = 0;
-                while u < CHUNK_SIZE {
+                while u < S::SIZE {
                     let entry = match mask[v][u] {
                         Some(e) => e,
                         None => {
@@ -979,7 +987,7 @@ pub fn mesh_chunk_into<B: Block>(
                         // Find widest run of identical entries along u.
                         // Sub-block u extents (slabs) must not merge along u.
                         if entry.u_intra_extent == ft {
-                            while u + width < CHUNK_SIZE && mask[v][u + width] == Some(entry) {
+                            while u + width < S::SIZE && mask[v][u + width] == Some(entry) {
                                 width += 1;
                             }
                         }
@@ -987,7 +995,7 @@ pub fn mesh_chunk_into<B: Block>(
                         // Extend the run along v.
                         // Sub-block v extents (slabs) must not merge along v.
                         if entry.v_intra_extent == ft {
-                            'extend: while v + height < CHUNK_SIZE {
+                            'extend: while v + height < S::SIZE {
                                 for du in 0..width {
                                     if mask[v + height][u + du] != Some(entry) {
                                         break 'extend;
@@ -1028,7 +1036,7 @@ pub fn mesh_chunk_into<B: Block>(
 
     // Cross-block pass: for each merge axis, scan columns along that
     // axis and merge consecutive identical cross blocks.
-    let axis_strides = [1usize, PADDED, PADDED * PADDED];
+    let axis_strides = [1usize, S::PADDED, S::PADDED * S::PADDED];
 
     for merge_axis in 0..3usize {
         let (plane_a, plane_b) = match merge_axis {
@@ -1038,16 +1046,16 @@ pub fn mesh_chunk_into<B: Block>(
         };
         let merge_stride = axis_strides[merge_axis];
 
-        for pb in 0..CHUNK_SIZE {
-            for pa in 0..CHUNK_SIZE {
+        for pb in 0..S::SIZE {
+            for pa in 0..S::SIZE {
                 let mut pos = [0usize; 3];
                 pos[plane_a] = pa + PADDING;
                 pos[plane_b] = pb + PADDING;
                 pos[merge_axis] = PADDING;
-                let col_base = pos[0] + pos[1] * PADDED + pos[2] * PADDED * PADDED;
+                let col_base = pos[0] + pos[1] * S::PADDED + pos[2] * S::PADDED * S::PADDED;
 
                 let mut m = 0;
-                while m < CHUNK_SIZE {
+                while m < S::SIZE {
                     let idx = col_base + m * merge_stride;
                     let block = unsafe { data.get_unchecked(idx) };
 
@@ -1066,7 +1074,7 @@ pub fn mesh_chunk_into<B: Block>(
 
                     let mut merge_len = 1u32;
                     if greedy {
-                        while m + merge_len as usize <= CHUNK_SIZE - 1 {
+                        while m + merge_len as usize <= S::SIZE - 1 {
                             let next_idx = col_base + (m + merge_len as usize) * merge_stride;
                             let next = unsafe { data.get_unchecked(next_idx) };
                             if next != block {
@@ -1120,6 +1128,7 @@ pub fn mesh_chunk_into<B: Block>(
 mod tests {
     use super::*;
     use crate::block::{CullMode, Shape};
+    use crate::chunk::{ChunkShape, ChunkShape16, PaddedChunk16};
     use crate::face::AlignedFace;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1144,7 +1153,7 @@ mod tests {
 
     #[test]
     fn block_faces_matches_greedy_mesh_for_single_block() {
-        let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
+        let mut chunk = PaddedChunk16::new_filled(TestBlock::Air);
         chunk.set(UVec3::ZERO, TestBlock::Stone);
         let from_chunk = mesh_chunk(&chunk, true);
         let from_block = mesh_block(&TestBlock::Stone, ());
@@ -1167,7 +1176,7 @@ mod tests {
 
     #[test]
     fn single_block_quad_size_is_one_block() {
-        let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
+        let mut chunk = PaddedChunk16::new_filled(TestBlock::Air);
         chunk.set(UVec3::ZERO, TestBlock::Stone);
         let q = mesh_chunk(&chunk, true);
         for face in AlignedFace::ALL {
@@ -1178,10 +1187,10 @@ mod tests {
 
     #[test]
     fn full_chunk_quad_size_is_sixteen_blocks() {
-        let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
-        for x in 0..CHUNK_SIZE as u32 {
-            for y in 0..CHUNK_SIZE as u32 {
-                for z in 0..CHUNK_SIZE as u32 {
+        let mut chunk = PaddedChunk16::new_filled(TestBlock::Air);
+        for x in 0..ChunkShape16::SIZE as u32 {
+            for y in 0..ChunkShape16::SIZE as u32 {
+                for z in 0..ChunkShape16::SIZE as u32 {
                     chunk.set(UVec3::new(x, y, z), TestBlock::Stone);
                 }
             }

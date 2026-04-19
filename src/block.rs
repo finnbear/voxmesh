@@ -81,6 +81,7 @@ pub trait Block: Copy + PartialEq + Debug {
     type Light: Light = ();
 
     fn shape(&self) -> Shape;
+
     fn cull_mode(&self) -> CullMode<Self::TransparentGroup>;
 
     /// Whether this block's material occludes ambient occlusion.
@@ -88,11 +89,13 @@ pub trait Block: Copy + PartialEq + Debug {
     /// This should reflect the material only (e.g. stone → true, glass
     /// → true, leaves → false, air → false). Shape-dependent logic
     /// (slabs only occlude on their flush side) is handled by the mesher.
+    #[inline]
     fn ao_opaque(&self) -> bool {
         matches!(self.cull_mode(), CullMode::Opaque)
     }
 
     /// The light value of this voxel for smooth per-vertex lighting.
+    #[inline]
     fn light(&self) -> Self::Light {
         Self::Light::default()
     }

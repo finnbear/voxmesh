@@ -1,3 +1,6 @@
+#![feature(generic_const_exprs)]
+#![allow(incomplete_features)]
+
 mod common;
 
 use common::*;
@@ -5,9 +8,9 @@ use voxmesh::*;
 
 #[test]
 fn flat_layer_merges_into_one_quad_per_face() {
-    let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
-    for x in 0..CHUNK_SIZE as u32 {
-        for z in 0..CHUNK_SIZE as u32 {
+    let mut chunk = PaddedChunk16::new_filled(TestBlock::Air);
+    for x in 0..ChunkShape16::SIZE as u32 {
+        for z in 0..ChunkShape16::SIZE as u32 {
             chunk.set(glam::UVec3::new(x, 0, z), TestBlock::Stone);
         }
     }
@@ -20,9 +23,9 @@ fn flat_layer_merges_into_one_quad_per_face() {
 
 #[test]
 fn flat_slab_layer_merges_into_one_quad_per_face() {
-    let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
-    for x in 0..CHUNK_SIZE as u32 {
-        for z in 0..CHUNK_SIZE as u32 {
+    let mut chunk = PaddedChunk16::new_filled(TestBlock::Air);
+    for x in 0..ChunkShape16::SIZE as u32 {
+        for z in 0..ChunkShape16::SIZE as u32 {
             chunk.set(glam::UVec3::new(x, 0, z), TestBlock::LowerSlab);
         }
     }
@@ -35,10 +38,10 @@ fn flat_slab_layer_merges_into_one_quad_per_face() {
 
 #[test]
 fn full_chunk_same_block_produces_six_quads() {
-    let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
-    for x in 0..CHUNK_SIZE as u32 {
-        for y in 0..CHUNK_SIZE as u32 {
-            for z in 0..CHUNK_SIZE as u32 {
+    let mut chunk = PaddedChunk16::new_filled(TestBlock::Air);
+    for x in 0..ChunkShape16::SIZE as u32 {
+        for y in 0..ChunkShape16::SIZE as u32 {
+            for z in 0..ChunkShape16::SIZE as u32 {
                 chunk.set(glam::UVec3::new(x, y, z), TestBlock::Stone);
             }
         }
@@ -52,15 +55,15 @@ fn full_chunk_same_block_produces_six_quads() {
 
 #[test]
 fn checkerboard_produces_many_quads() {
-    let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
-    for x in 0..CHUNK_SIZE as u32 {
-        for z in 0..CHUNK_SIZE as u32 {
+    let mut chunk = PaddedChunk16::new_filled(TestBlock::Air);
+    for x in 0..ChunkShape16::SIZE as u32 {
+        for z in 0..ChunkShape16::SIZE as u32 {
             if (x + z) % 2 == 0 {
                 chunk.set(glam::UVec3::new(x, 0, z), TestBlock::Stone);
             }
         }
     }
     let q = mesh_chunk(&chunk, true);
-    let block_count = (CHUNK_SIZE * CHUNK_SIZE + 1) / 2; // 128
+    let block_count = (ChunkShape16::SIZE * ChunkShape16::SIZE + 1) / 2; // 128
     assert_eq!(q.total(), block_count * 6);
 }

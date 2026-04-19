@@ -1,3 +1,6 @@
+#![feature(generic_const_exprs)]
+#![allow(incomplete_features)]
+
 mod common;
 
 use common::*;
@@ -57,7 +60,7 @@ fn opaque_block_above_upper_slab_culls_flush_face() {
 
 #[test]
 fn slab_inset_face_never_culled() {
-    let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
+    let mut chunk = PaddedChunk16::new_filled(TestBlock::Air);
     chunk.set(glam::UVec3::ZERO, TestBlock::UpperSlab);
     // Place stone in padding below slab (padded y=0).
     chunk.set_padded(glam::UVec3::new(1, 0, 1), TestBlock::Stone);

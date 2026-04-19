@@ -1,3 +1,6 @@
+#![feature(generic_const_exprs)]
+#![allow(incomplete_features)]
+
 mod common;
 
 use common::*;
@@ -5,7 +8,7 @@ use voxmesh::*;
 
 #[test]
 fn empty_chunk_produces_no_quads() {
-    let chunk = PaddedChunk::new_filled(TestBlock::Air);
+    let chunk = PaddedChunk16::new_filled(TestBlock::Air);
     let q = mesh_chunk(&chunk, true);
     assert_eq!(q.total(), 0);
 }
@@ -53,17 +56,17 @@ fn air_does_not_cull_adjacent_face() {
 
 #[test]
 fn blocks_only_in_padding_produce_no_quads() {
-    let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
+    let mut chunk = PaddedChunk16::new_filled(TestBlock::Air);
     // Place stone in every padding cell but leave the real chunk empty.
-    for x in 0..PADDED {
-        for y in 0..PADDED {
-            for z in 0..PADDED {
+    for x in 0..ChunkShape16::PADDED {
+        for y in 0..ChunkShape16::PADDED {
+            for z in 0..ChunkShape16::PADDED {
                 let in_real = x >= PADDING
-                    && x < PADDING + CHUNK_SIZE
+                    && x < PADDING + ChunkShape16::SIZE
                     && y >= PADDING
-                    && y < PADDING + CHUNK_SIZE
+                    && y < PADDING + ChunkShape16::SIZE
                     && z >= PADDING
-                    && z < PADDING + CHUNK_SIZE;
+                    && z < PADDING + ChunkShape16::SIZE;
                 if !in_real {
                     chunk.set_padded(
                         glam::UVec3::new(x as u32, y as u32, z as u32),

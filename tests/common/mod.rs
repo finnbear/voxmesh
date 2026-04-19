@@ -94,7 +94,7 @@ impl Block for TestBlock {
 
 /// Meshes a chunk containing only the given block placements.
 pub fn mesh_with(blocks: &[(u32, u32, u32, TestBlock)]) -> Quads {
-    let mut chunk = PaddedChunk::new_filled(TestBlock::Air);
+    let mut chunk = PaddedChunk16::new_filled(TestBlock::Air);
     for &(x, y, z, block) in blocks {
         chunk.set(glam::UVec3::new(x, y, z), block);
     }

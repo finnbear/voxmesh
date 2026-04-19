@@ -1,3 +1,6 @@
+#![feature(generic_const_exprs)]
+#![allow(incomplete_features)]
+
 //! Software-renders a meshed voxel chunk using `euc` and writes the
 //! result to `examples/render_chunk.png`.
 //!
@@ -133,11 +136,11 @@ impl Block for LitBlock {
 }
 
 /// BFS flood-fill light propagation across the padded chunk.
-fn propagate_light(chunk: &mut PaddedChunk<LitBlock>) {
+fn propagate_light(chunk: &mut PaddedChunk16<LitBlock>) {
     let mut queue = VecDeque::new();
 
     // Seed with all emitting blocks.
-    for i in 0..PADDED_VOLUME {
+    for i in 0..ChunkShape16::PADDED_VOLUME {
         let b = chunk.data[i];
         if b.propagated_light > 0 {
             queue.push_back((i, b.propagated_light));
@@ -147,10 +150,10 @@ fn propagate_light(chunk: &mut PaddedChunk<LitBlock>) {
     let strides: [isize; 6] = [
         1,
         -1,
-        PADDED as isize,
-        -(PADDED as isize),
-        (PADDED * PADDED) as isize,
-        -((PADDED * PADDED) as isize),
+        ChunkShape16::PADDED as isize,
+        -(ChunkShape16::PADDED as isize),
+        (ChunkShape16::PADDED * ChunkShape16::PADDED) as isize,
+        -((ChunkShape16::PADDED * ChunkShape16::PADDED) as isize),
     ];
 
     while let Some((idx, level)) = queue.pop_front() {
@@ -161,7 +164,7 @@ fn propagate_light(chunk: &mut PaddedChunk<LitBlock>) {
 
         for &stride in &strides {
             let ni = idx as isize + stride;
-            if ni < 0 || ni >= PADDED_VOLUME as isize {
+            if ni < 0 || ni >= ChunkShape16::PADDED_VOLUME as isize {
                 continue;
             }
             let ni = ni as usize;
@@ -387,16 +390,16 @@ impl<'r, 'a: 'r> Pipeline<'r> for ChunkPipeline<'a> {
 
 // Scene construction
 
-fn build_chunk() -> PaddedChunk<LitBlock> {
+fn build_chunk() -> PaddedChunk16<LitBlock> {
     use glam::UVec3;
 
     let air = LitBlock {
         block: MyBlock::Air,
         propagated_light: 0,
     };
-    let mut chunk = PaddedChunk::new_filled(air);
+    let mut chunk = PaddedChunk16::new_filled(air);
 
-    let set = |chunk: &mut PaddedChunk<LitBlock>, x: u32, y: u32, z: u32, block: MyBlock| {
+    let set = |chunk: &mut PaddedChunk16<LitBlock>, x: u32, y: u32, z: u32, block: MyBlock| {
         chunk.set(
             UVec3::new(x, y, z),
             LitBlock {
@@ -407,8 +410,8 @@ fn build_chunk() -> PaddedChunk<LitBlock> {
     };
 
     // Cobblestone floor (y=0).
-    for x in 0..CHUNK_SIZE as u32 {
-        for z in 0..CHUNK_SIZE as u32 {
+    for x in 0..ChunkShape16::SIZE as u32 {
+        for z in 0..ChunkShape16::SIZE as u32 {
             set(&mut chunk, x, 0, z, MyBlock::Cobblestone);
         }
     }
@@ -521,7 +524,7 @@ fn build_chunk() -> PaddedChunk<LitBlock> {
 /// Converts voxmesh quads into triangle vertices suitable for euc.
 /// Uses per-vertex AO and smooth light from the mesher, and applies
 /// the anisotropy fix for correct AO interpolation.
-fn quads_to_vertices(quads: &Quads<u8>, chunk: &PaddedChunk<LitBlock>) -> Vec<Vertex> {
+fn quads_to_vertices(quads: &Quads<u8>, chunk: &PaddedChunk16<LitBlock>) -> Vec<Vertex> {
     let mut verts = Vec::new();
 
     for qf in Face::ALL {
