@@ -8,10 +8,14 @@ use std::mem;
 ///
 /// The `()` implementation disables all lighting computation at zero cost.
 pub trait Light: Copy + PartialEq + Eq + Debug + Default {
-    /// Whether AO and light computation is enabled.
-    /// When false, the compiler eliminates all lighting code paths.
+    /// Whether ambient occlusion computation is enabled.
+    /// When false, all AO values are set to 3 (fully lit).
+    const AO_ENABLED: bool = true;
+
+    /// Whether smooth light computation is enabled.
+    /// When false, all light values are set to the default.
     /// Defaults to `true` for non-zero-sized types.
-    const ENABLED: bool = mem::size_of::<Self>() > 0;
+    const LIGHT_ENABLED: bool = mem::size_of::<Self>() > 0;
 
     /// The type returned by [`average`](Self::average).
     ///

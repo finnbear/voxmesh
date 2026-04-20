@@ -559,33 +559,37 @@ fn compute_ao_light<B: Block>(
     let neg_u_pos_v = get(-u_stride, v_stride);
 
     // AO: does the material darken neighboring vertices?
-    let ao_neg_u = shape_ao_opaque(neg_u, ao_face);
-    let ao_pos_u = shape_ao_opaque(pos_u, ao_face);
-    let ao_neg_v = shape_ao_opaque(neg_v, ao_face);
-    let ao_pos_v = shape_ao_opaque(pos_v, ao_face);
+    let ao = if B::Light::AO_ENABLED {
+        let ao_neg_u = shape_ao_opaque(neg_u, ao_face);
+        let ao_pos_u = shape_ao_opaque(pos_u, ao_face);
+        let ao_neg_v = shape_ao_opaque(neg_v, ao_face);
+        let ao_pos_v = shape_ao_opaque(pos_v, ao_face);
 
-    let ao0 = if ao_neg_u && ao_neg_v {
-        0
-    } else {
-        3 - ao_neg_u as u8 - ao_neg_v as u8 - shape_ao_opaque(neg_u_neg_v, ao_face) as u8
-    };
-    let ao1 = if ao_pos_u && ao_neg_v {
-        0
-    } else {
-        3 - ao_pos_u as u8 - ao_neg_v as u8 - shape_ao_opaque(pos_u_neg_v, ao_face) as u8
-    };
-    let ao2 = if ao_pos_u && ao_pos_v {
-        0
-    } else {
-        3 - ao_pos_u as u8 - ao_pos_v as u8 - shape_ao_opaque(pos_u_pos_v, ao_face) as u8
-    };
-    let ao3 = if ao_neg_u && ao_pos_v {
-        0
-    } else {
-        3 - ao_neg_u as u8 - ao_pos_v as u8 - shape_ao_opaque(neg_u_pos_v, ao_face) as u8
-    };
+        let ao0 = if ao_neg_u && ao_neg_v {
+            0
+        } else {
+            3 - ao_neg_u as u8 - ao_neg_v as u8 - shape_ao_opaque(neg_u_neg_v, ao_face) as u8
+        };
+        let ao1 = if ao_pos_u && ao_neg_v {
+            0
+        } else {
+            3 - ao_pos_u as u8 - ao_neg_v as u8 - shape_ao_opaque(pos_u_neg_v, ao_face) as u8
+        };
+        let ao2 = if ao_pos_u && ao_pos_v {
+            0
+        } else {
+            3 - ao_pos_u as u8 - ao_pos_v as u8 - shape_ao_opaque(pos_u_pos_v, ao_face) as u8
+        };
+        let ao3 = if ao_neg_u && ao_pos_v {
+            0
+        } else {
+            3 - ao_neg_u as u8 - ao_pos_v as u8 - shape_ao_opaque(neg_u_pos_v, ao_face) as u8
+        };
 
-    let ao = [ao0, ao1, ao2, ao3];
+        [ao0, ao1, ao2, ao3]
+    } else {
+        [3; 4]
+    };
 
     // Smooth light: each vertex averages light from the 4 surrounding
     // voxels unconditionally. Unlike AO, we do not exclude opaque
@@ -593,13 +597,17 @@ fn compute_ao_light<B: Block>(
     // and excluding them would cause different blocks sharing a vertex
     // to compute different averages (since one block's "side" neighbor
     // is another's "corner"), producing visible discontinuities.
-    let cl = center.light();
-    let light = [
-        B::Light::average(&[cl, neg_u.light(), neg_v.light(), neg_u_neg_v.light()]),
-        B::Light::average(&[cl, pos_u.light(), neg_v.light(), pos_u_neg_v.light()]),
-        B::Light::average(&[cl, pos_u.light(), pos_v.light(), pos_u_pos_v.light()]),
-        B::Light::average(&[cl, neg_u.light(), pos_v.light(), neg_u_pos_v.light()]),
-    ];
+    let light = if B::Light::LIGHT_ENABLED {
+        let cl = center.light();
+        [
+            B::Light::average(&[cl, neg_u.light(), neg_v.light(), neg_u_neg_v.light()]),
+            B::Light::average(&[cl, pos_u.light(), neg_v.light(), pos_u_neg_v.light()]),
+            B::Light::average(&[cl, pos_u.light(), pos_v.light(), pos_u_pos_v.light()]),
+            B::Light::average(&[cl, neg_u.light(), pos_v.light(), neg_u_pos_v.light()]),
+        ]
+    } else {
+        Default::default()
+    };
 
     (ao, light)
 }
@@ -933,7 +941,7 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
                     };
 
                     // Compute AO and smooth light for visible faces.
-                    if B::Light::ENABLED {
+                    if B::Light::AO_ENABLED || B::Light::LIGHT_ENABLED {
                         if let Some(ref mut e) = entry {
                             // Faces inset into the block sample AO/light
                             // at the block's own plane rather than the
@@ -1090,7 +1098,7 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
                     block_pos[merge_axis] = (PADDING + m) as u32;
 
                     // Compute interpolated light for cross block endpoints.
-                    let (light_bottom, light_top) = if B::Light::ENABLED {
+                    let (light_bottom, light_top) = if B::Light::LIGHT_ENABLED {
                         let first_idx = idx;
                         let last_idx = col_base + (m + merge_len as usize - 1) * merge_stride;
                         // Bottom: average of first block and the block below it.
