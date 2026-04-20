@@ -10,9 +10,9 @@ use crate::light::Light;
 pub struct Quad<L: Light = ()> {
     /// Position of the lowest-coordinate corner in 1/16ths of a block,
     /// in the padded 3D space of the chunk.
-    origin_padded: UVec3,
+    pub origin_padded: UVec3,
     /// Size of the quad in 1/16ths of a block.
-    size: UVec2,
+    pub size: UVec2,
     /// Per-vertex ambient occlusion (0=fully occluded, 3=fully lit).
     /// Vertex order matches [`positions`](Self::positions).
     pub ao: [u8; 4],
