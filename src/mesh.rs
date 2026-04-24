@@ -235,15 +235,27 @@ impl<L: Light> Quad<L> {
         [start, start + 1, start + 2, start, start + 2, start + 3]
     }
 
-    /// Returns the 6 vertex indices with the anisotropy fix for AO.
-    ///
-    /// When the AO values form a saddle pattern (opposite corners have
-    /// different sums), the triangle diagonal is flipped to avoid visual
-    /// artifacts in AO shading.
+    /// Returns the 6 vertex indices with the triangle diagonal chosen to
+    /// maximize the sum of AO values along the diagonal. Equivalent to
+    /// [`indices_optimal`](Self::indices_optimal) with a key of AO alone.
     #[inline]
     pub fn indices_ao(&self, start: u32) -> [u32; 6] {
-        let ao = &self.ao;
-        if ao[0] as u16 + ao[2] as u16 >= ao[1] as u16 + ao[3] as u16 {
+        self.indices_optimal(start, |ao, _light| ao as u16)
+    }
+
+    /// Returns the 6 vertex indices with the triangle diagonal chosen
+    /// to improve interpolation of some combination of AO and lighting.
+    #[inline]
+    pub fn indices_optimal<K>(
+        &self,
+        start: u32,
+        mut key: impl FnMut(u8, L::Average) -> K,
+    ) -> [u32; 6]
+    where
+        K: PartialOrd + std::ops::Add<Output = K>,
+    {
+        let [k0, k1, k2, k3] = std::array::from_fn(|i| key(self.ao[i], self.light[i]));
+        if k0 + k2 >= k1 + k3 {
             [start, start + 1, start + 2, start, start + 2, start + 3]
         } else {
             [start, start + 1, start + 3, start + 1, start + 2, start + 3]
