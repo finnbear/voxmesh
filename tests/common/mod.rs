@@ -69,8 +69,14 @@ impl Block for TestBlock {
                 face: AlignedFace::PosX,
                 stretch: 0,
             }),
-            TestBlock::Ladder => Shape::Facade(AlignedFace::PosX),
-            TestBlock::Rail => Shape::Facade(AlignedFace::NegY),
+            TestBlock::Ladder => Shape::Facade(FacadeInfo {
+                face: AlignedFace::PosX,
+                offset: 1,
+            }),
+            TestBlock::Rail => Shape::Facade(FacadeInfo {
+                face: AlignedFace::NegY,
+                offset: 1,
+            }),
             TestBlock::Cactus => Shape::Inset(1),
             _ => Shape::WholeBlock,
         }

@@ -52,6 +52,16 @@ pub struct CrossInfo {
     pub stretch: CrossStretch,
 }
 
+/// Configuration for a flat double-sided quad parallel to one face.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FacadeInfo {
+    /// The face the quad is parallel to and offset inward from.
+    pub face: AlignedFace,
+    /// Offset from the named face in 1/16ths of a block, range 0..=16.
+    /// Ladders use 1; a block-centered plane uses 8.
+    pub offset: u8,
+}
+
 /// The geometric shape of a block, controlling quad generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shape {
@@ -61,8 +71,9 @@ pub enum Shape {
     Slab(SlabInfo),
     /// X-shaped diagonal billboard (e.g. sugar cane, cobwebs).
     Cross(CrossInfo),
-    /// Flat face offset 1/16th inward, rendered double-sided (e.g. ladders).
-    Facade(AlignedFace),
+    /// Flat quad offset inward from one face, rendered double-sided
+    /// (e.g. ladders).
+    Facade(FacadeInfo),
     /// Side faces inset by `n` sixteenths; top/bottom flush (e.g. cactus).
     Inset(Thickness),
 }

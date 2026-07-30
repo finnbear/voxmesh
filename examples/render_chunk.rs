@@ -89,8 +89,14 @@ impl Block for LitBlock {
                 face: AlignedFace::NegY,
                 stretch: 4,
             }),
-            MyBlock::Ladder => Shape::Facade(AlignedFace::PosX),
-            MyBlock::Rail => Shape::Facade(AlignedFace::NegY),
+            MyBlock::Ladder => Shape::Facade(FacadeInfo {
+                face: AlignedFace::PosX,
+                offset: 1,
+            }),
+            MyBlock::Rail => Shape::Facade(FacadeInfo {
+                face: AlignedFace::NegY,
+                offset: 1,
+            }),
             MyBlock::Cactus => Shape::Inset(1),
             MyBlock::ChainY => Shape::Cross(CrossInfo {
                 face: AlignedFace::NegY,

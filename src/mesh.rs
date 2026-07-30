@@ -379,12 +379,17 @@ fn mask_entry_for_shape<B: Block>(
     match block.shape() {
         // Cross blocks have no axis-aligned faces.
         Shape::Cross(_) => return None,
-        // Facade emits one quad on its own face, offset 1/16 inward.
-        Shape::Facade(facade_face) => {
-            if face != facade_face {
+        // Facade emits one quad on its own face, offset `info.offset`
+        // sixteenths inward.
+        Shape::Facade(info) => {
+            if face != info.face {
                 return None;
             }
-            let normal_pos = if face.is_positive() { ft - 1 } else { 1 };
+            let normal_pos = if face.is_positive() {
+                ft - info.offset
+            } else {
+                info.offset
+            };
             return Some(MaskEntry {
                 block: *block,
                 normal_pos,
@@ -931,8 +936,9 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
                         }
                         // Cross blocks are handled in a separate pass.
                         Shape::Cross(_) => None,
-                        // Facade quads are offset 1/16 inward, never at
-                        // the block boundary, so skip neighbor culling.
+                        // Facade quads are offset inward from their face,
+                        // treated as never flush with the block boundary,
+                        // so skip neighbor culling.
                         Shape::Facade(_) => mask_entry_for_shape(block, face, u_idx, v_idx),
                         Shape::Inset(_) => {
                             if face.axis() == Axis::Y {
