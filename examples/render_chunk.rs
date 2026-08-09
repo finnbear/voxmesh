@@ -542,7 +542,7 @@ fn quads_to_vertices(quads: &Quads<u8>, chunk: &PaddedChunk16<LitBlock>) -> Vec<
             let normal = Vec3::new(n.x, n.y, n.z);
 
             let positions = quad.positions(qf, lit_block.shape());
-            let uvs = quad.texture_coordinates(qf, Axis::X, false);
+            let uvs = quad.texture_coordinates(qf, lit_block.shape(), Axis::X, false);
 
             let two_sided = qf.is_diagonal() || matches!(lit_block.shape(), Shape::Facade(_));
             let atlas_off = atlas_u_offset(lit_block.block, qf);

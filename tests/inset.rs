@@ -168,7 +168,7 @@ fn inset_texture_coordinates_span_one() {
     let q = mesh_block(&TestBlock::Cactus, ());
     for face in AlignedFace::ALL {
         let quad = &q.faces[face.index()][0];
-        let uvs = quad.texture_coordinates(face, Axis::X, false);
+        let uvs = quad.texture_coordinates(face, Shape::WholeBlock, Axis::X, false);
 
         let u_min = uvs.iter().map(|uv| uv.x).fold(f32::INFINITY, f32::min);
         let u_max = uvs.iter().map(|uv| uv.x).fold(f32::NEG_INFINITY, f32::max);

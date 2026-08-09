@@ -218,7 +218,7 @@ fn cross_texture_coordinates_span_one_by_one() {
     let q = mesh_block(&TestBlock::SugarCane, ());
     for diag in DiagonalFace::ALL {
         let quad = &q.diagonals[diag.index()][0];
-        let uvs = quad.texture_coordinates(diag, Axis::X, false);
+        let uvs = quad.texture_coordinates(diag, Shape::WholeBlock, Axis::X, false);
         assert_eq!(uvs[0], glam::Vec2::new(0.0, 0.0));
         assert_eq!(uvs[1], glam::Vec2::new(1.0, 0.0));
         assert_eq!(uvs[2], glam::Vec2::new(1.0, 1.0));
@@ -235,7 +235,7 @@ fn merged_cross_texture_coordinates_scale_vertically() {
     ]);
     for diag in DiagonalFace::ALL {
         let quad = &q.diagonals[diag.index()][0];
-        let uvs = quad.texture_coordinates(diag, Axis::X, false);
+        let uvs = quad.texture_coordinates(diag, Shape::WholeBlock, Axis::X, false);
         // v_size should be 3.0 (3 blocks tall).
         assert_eq!(uvs[2], glam::Vec2::new(1.0, 3.0));
         assert_eq!(uvs[3], glam::Vec2::new(0.0, 3.0));

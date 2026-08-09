@@ -199,7 +199,7 @@ fn single_block_tex_coords_match_block_mesh() {
 
         // voxmesh positions and UVs.
         let vm_positions = vm_quad.positions(face, Shape::WholeBlock);
-        let vm_uvs = vm_quad.texture_coordinates(face, Axis::X, flip_v);
+        let vm_uvs = vm_quad.texture_coordinates(face, Shape::WholeBlock, Axis::X, flip_v);
 
         // Match vertices by position, then compare UVs.
         for (bm_i, bm_pos) in bm_positions.iter().enumerate() {

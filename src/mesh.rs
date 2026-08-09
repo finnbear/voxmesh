@@ -1,6 +1,6 @@
 use glam::{UVec2, UVec3, Vec2, Vec3};
 
-use crate::block::{Block, CrossInfo, CullMode, Shape, FULL_THICKNESS};
+use crate::block::{Block, CrossInfo, CullMode, FluidInfo, Shape, Thickness, FULL_THICKNESS};
 use crate::chunk::{ChunkShape, PaddedChunk, PADDING};
 use crate::face::{AlignedFace, Axis, DiagonalFace, Face};
 use crate::light::Light;
@@ -13,6 +13,14 @@ pub struct Quad<L: Light = ()> {
     pub origin_padded: UVec3,
     /// Size of the quad in 1/16ths of a block.
     pub size: UVec2,
+    /// Per-vertex displacement along the fluid axis in 1/16ths, applied
+    /// by [`positions`](Self::positions) when the quad's shape is
+    /// [`Shape::Fluid`]. Vertex order matches
+    /// [`positions`](Self::positions).
+    ///
+    /// Always `[0; 4]` for every other shape, and for every quad at all
+    /// unless [`Block::FLUID_ENABLED`](crate::Block::FLUID_ENABLED).
+    pub corner_offsets: [i8; 4],
     /// Per-vertex ambient occlusion (0=fully occluded, 3=fully lit).
     /// Vertex order matches [`positions`](Self::positions).
     pub ao: [u8; 4],
@@ -90,11 +98,23 @@ impl<L: Light> Quad<L> {
                 // Emit CCW winding when viewed from outside. The vertex order
                 // [base, base+du, base+du+dv, base+dv] is CCW when u x v
                 // aligns with the outward normal. Otherwise swap du/dv.
-                if face.tangent_cross_positive() {
+                let mut verts = if face.tangent_cross_positive() {
                     [base, base + du, base + du + dv, base + dv]
                 } else {
                     [base, base + dv, base + dv + du, base + du]
+                };
+
+                // A fluid surface rides a height field its neighbors share,
+                // so each vertex sits wherever the four columns meeting at
+                // it agree it does rather than on the block boundary.
+                if let Shape::Fluid(info) = shape {
+                    let axis = info.face.axis().index();
+                    for (vert, offset) in verts.iter_mut().zip(self.corner_offsets) {
+                        vert[axis] += offset as f32 * scale;
+                    }
                 }
+
+                verts
             }
             Face::Diagonal(diag) => {
                 let info = match shape {
@@ -160,9 +180,14 @@ impl<L: Light> Quad<L> {
     ///
     /// `u_flip_face` and `flip_v` control UV mirroring for axis-aligned
     /// faces and are ignored for diagonal faces.
+    ///
+    /// `shape` is used to follow a [`Shape::Fluid`] surface: the side
+    /// face of a half-full fluid is a trapezoid, and its texture is
+    /// cropped to match rather than squashed into it.
     pub fn texture_coordinates(
         &self,
         face: impl Into<Face>,
+        shape: Shape,
         u_flip_face: Axis,
         flip_v: bool,
     ) -> [Vec2; 4] {
@@ -185,7 +210,7 @@ impl<L: Light> Quad<L> {
                     face.axis() != u_flip_face
                 };
 
-                let raw = if face.tangent_cross_positive() {
+                let mut raw = if face.tangent_cross_positive() {
                     [
                         Vec2::new(u_off, v_off),
                         Vec2::new(u_off + u_size, v_off),
@@ -200,6 +225,26 @@ impl<L: Light> Quad<L> {
                         Vec2::new(u_off + u_size, v_off),
                     ]
                 };
+
+                // Track a fluid surface, so a side face crops its texture
+                // instead of stretching it. On the surface face itself the
+                // fluid axis is the normal, so nothing moves. Applied
+                // before the flip, which mirrors the finished coordinate.
+                if let Shape::Fluid(info) = shape {
+                    let fluid_idx = info.face.axis().index();
+                    let component = if fluid_idx == u_idx {
+                        Some(0)
+                    } else if fluid_idx == v_idx {
+                        Some(1)
+                    } else {
+                        None
+                    };
+                    if let Some(component) = component {
+                        for (uv, offset) in raw.iter_mut().zip(self.corner_offsets) {
+                            uv[component] += offset as f32 * scale;
+                        }
+                    }
+                }
 
                 raw.map(|uv| {
                     Vec2::new(
@@ -288,6 +333,10 @@ struct MaskEntry<B: Block> {
     v_intra_offset: u8,
     /// Quad extent within one block cell along v, in 1/16ths.
     v_intra_extent: u8,
+    /// Per-vertex fluid displacement in mask-local order. Part of the
+    /// entry's identity, so greedy merging never spans a slope — see
+    /// the note on the emit phase in [`mesh_chunk_into`].
+    corner_offsets: [i8; 4],
     /// Per-vertex AO in mask-local order: [umin/vmin, umax/vmin, umax/vmax, umin/vmax].
     ao: [u8; 4],
     /// Per-vertex light in mask-local order.
@@ -328,6 +377,18 @@ fn neighbor_covers_face_region<B: Block>(block: &B, neighbor: &B, face: AlignedF
         Shape::Cross(_) | Shape::Facade(_) => false,
         // Inset blocks cover top/bottom (flush) but not sides (inset).
         Shape::Inset(_) => face.axis() == Axis::Y,
+        Shape::Fluid(n_info) => {
+            // The same fluid stitches its surface onto ours, so there is
+            // never a gap behind the shared face however deep either
+            // column happens to be. A different fluid only covers the
+            // region when it fills its cell.
+            if let Shape::Fluid(b_info) = block.shape() {
+                if b_info.id == n_info.id {
+                    return true;
+                }
+            }
+            n_info.height >= FULL_THICKNESS
+        }
         Shape::Slab(n_info) => {
             // The neighbor slab is flush against our face only if its
             // slab face equals our face's opposite.
@@ -397,11 +458,16 @@ fn mask_entry_for_shape<B: Block>(
                 u_intra_extent: ft,
                 v_intra_offset: 0,
                 v_intra_extent: ft,
+                corner_offsets: [0; 4],
                 ao: [3; 4],
                 light: Default::default(),
             });
         }
-        Shape::WholeBlock => {
+        // A fluid with no neighbors to share a surface with is just its
+        // cell: a held bucket of water is a cube, not a puddle. The
+        // chunk mesher never reaches this arm; it has the neighborhood
+        // and uses `compute_fluid_mask_entry` instead.
+        Shape::WholeBlock | Shape::Fluid(_) => {
             let normal_pos = if face.is_positive() { ft } else { 0 };
             Some(MaskEntry {
                 block: *block,
@@ -410,6 +476,7 @@ fn mask_entry_for_shape<B: Block>(
                 u_intra_extent: ft,
                 v_intra_offset: 0,
                 v_intra_extent: ft,
+                corner_offsets: [0; 4],
                 ao: [3; 4],
                 light: Default::default(),
             })
@@ -436,6 +503,7 @@ fn mask_entry_for_shape<B: Block>(
                 u_intra_extent: ft,
                 v_intra_offset: 0,
                 v_intra_extent: ft,
+                corner_offsets: [0; 4],
                 ao: [3; 4],
                 light: Default::default(),
             })
@@ -467,6 +535,7 @@ fn mask_entry_for_shape<B: Block>(
                     u_intra_extent: ft,
                     v_intra_offset: 0,
                     v_intra_extent: ft,
+                    corner_offsets: [0; 4],
                     ao: [3; 4],
                     light: Default::default(),
                 })
@@ -487,6 +556,7 @@ fn mask_entry_for_shape<B: Block>(
                     u_intra_extent: u_ext,
                     v_intra_offset: v_off,
                     v_intra_extent: v_ext,
+                    corner_offsets: [0; 4],
                     ao: [3; 4],
                     light: Default::default(),
                 })
@@ -507,7 +577,11 @@ fn compute_slab_mask_entry<B: Block>(
 ) -> Option<MaskEntry<B>> {
     let info = match block.shape() {
         Shape::Slab(info) => info,
-        Shape::WholeBlock | Shape::Cross(_) | Shape::Facade(_) | Shape::Inset(_) => unreachable!(),
+        Shape::WholeBlock
+        | Shape::Cross(_)
+        | Shape::Facade(_)
+        | Shape::Inset(_)
+        | Shape::Fluid(_) => unreachable!(),
     };
 
     // Flush face along the slab's own axis: check neighbor culling.
@@ -525,6 +599,204 @@ fn compute_slab_mask_entry<B: Block>(
     mask_entry_for_shape(block, face, u_idx, v_idx)
 }
 
+/// The [`FluidInfo`] of the block at `idx`, or `None` if it is not a
+/// fluid of `id`.
+///
+/// # Safety
+///
+/// `idx` must be within `data`.
+#[inline]
+unsafe fn fluid_at<B: Block>(data: &[B], idx: usize, id: u8) -> Option<FluidInfo> {
+    debug_assert!(idx < data.len(), "fluid neighborhood escaped the chunk");
+    match unsafe { data.get_unchecked(idx) }.shape() {
+        Shape::Fluid(info) if info.id == id => Some(info),
+        _ => None,
+    }
+}
+
+/// How much of the cell at `idx` the fluid `id` occupies, in 1/16ths, or
+/// `None` if that cell is not part of the fluid at all.
+///
+/// A column with more of the same fluid stacked on it is full whatever
+/// it claims: there is nothing above for its surface to be a surface of.
+/// This is the rule a block cannot apply for itself, since
+/// [`Block::shape`] cannot see its neighbor.
+///
+/// # Safety
+///
+/// `idx` and `idx + up_stride` must be within `data`.
+#[inline]
+unsafe fn fluid_height<B: Block>(
+    data: &[B],
+    idx: usize,
+    id: u8,
+    up_stride: isize,
+) -> Option<Thickness> {
+    let info = unsafe { fluid_at(data, idx, id) }?;
+    let above = (idx as isize + up_stride) as usize;
+    if unsafe { fluid_at(data, above, id) }.is_some() {
+        Some(FULL_THICKNESS)
+    } else {
+        Some(info.height.min(FULL_THICKNESS))
+    }
+}
+
+/// Index of the surface corner at the given signs along the two axes
+/// perpendicular to the fluid axis, in the mask-local order
+/// `[min/min, max/min, max/max, min/max]`.
+#[inline]
+fn corner_index(pos_a: bool, pos_b: bool) -> usize {
+    match (pos_a, pos_b) {
+        (false, false) => 0,
+        (true, false) => 1,
+        (true, true) => 2,
+        (false, true) => 3,
+    }
+}
+
+/// Surface heights in 1/16ths at the 4 corners of the cell at `idx`,
+/// indexed by [`corner_index`] over the axes `a_stride` and `b_stride`.
+///
+/// Each corner takes the tallest of the four columns meeting at it,
+/// skipping those that hold no fluid. Because that depends on nothing
+/// but the 2×2 of columns the corner is shared with, every cell touching
+/// a corner computes the same height for it — which is what lets
+/// neighboring fluid surfaces meet exactly, and in turn what lets the
+/// shared face between them be culled without leaving a crack.
+///
+/// # Safety
+///
+/// The 3×3 of columns around `idx`, and one step along `up_stride` from
+/// each, must be within `data`. The padding ring guarantees this for any
+/// cell the mesher visits.
+unsafe fn fluid_corner_heights<B: Block>(
+    data: &[B],
+    idx: usize,
+    id: u8,
+    up_stride: isize,
+    a_stride: isize,
+    b_stride: isize,
+) -> [Thickness; 4] {
+    // The 3x3 of columns around this one, indexed [b + 1][a + 1].
+    let mut heights = [[0 as Thickness; 3]; 3];
+    for (b, row) in heights.iter_mut().enumerate() {
+        for (a, cell) in row.iter_mut().enumerate() {
+            let offset = (a as isize - 1) * a_stride + (b as isize - 1) * b_stride;
+            *cell = unsafe { fluid_height(data, (idx as isize + offset) as usize, id, up_stride) }
+                .unwrap_or(0);
+        }
+    }
+    // Corner `(a, b)` is the max over the 2x2 at [b..b+2][a..a+2]. The
+    // cell itself is heights[1][1], which every corner includes, so no
+    // corner is ever left at zero.
+    let corner = |a: usize, b: usize| {
+        heights[b][a]
+            .max(heights[b][a + 1])
+            .max(heights[b + 1][a])
+            .max(heights[b + 1][a + 1])
+    };
+    [corner(0, 0), corner(1, 0), corner(1, 1), corner(0, 1)]
+}
+
+/// Compute the mask entry for a fluid block/face combination, or `None`
+/// if the face is not visible. Only called when `block.shape()` is
+/// `Fluid` and [`Block::FLUID_ENABLED`].
+///
+/// # Safety
+///
+/// `idx` must be an inner (non-padding) cell of `data`, so that the 3×3
+/// of columns around it and one step along the fluid axis are in bounds.
+#[allow(clippy::too_many_arguments)]
+unsafe fn compute_fluid_mask_entry<B: Block>(
+    data: &[B],
+    idx: usize,
+    block: &B,
+    neighbor: &B,
+    info: FluidInfo,
+    face: AlignedFace,
+    normal_idx: usize,
+    u_idx: usize,
+    v_idx: usize,
+    padded: usize,
+) -> Option<MaskEntry<B>> {
+    let ft = FULL_THICKNESS as u8;
+    let up_idx = info.face.axis().index();
+    let axis_strides = [1isize, padded as isize, (padded * padded) as isize];
+    let up_stride = if info.face.is_positive() {
+        axis_strides[up_idx]
+    } else {
+        -axis_strides[up_idx]
+    };
+
+    if face == info.face {
+        // The surface sits inside the block whenever the column is not
+        // full, so whatever is above cannot hide it: water at half
+        // height under a stone ceiling is visible through the gap. Only
+        // a full column is flush enough to be culled at the boundary.
+        let full = unsafe { fluid_height(data, idx, info.id, up_stride) }
+            .is_some_and(|height| height >= FULL_THICKNESS);
+        if full && is_culled_at_boundary(block, neighbor, face) {
+            return None;
+        }
+    } else if is_culled_at_boundary(block, neighbor, face) {
+        return None;
+    }
+
+    let mut entry = MaskEntry {
+        block: *block,
+        normal_pos: if face.is_positive() { ft } else { 0 },
+        u_intra_offset: 0,
+        u_intra_extent: ft,
+        v_intra_offset: 0,
+        v_intra_extent: ft,
+        corner_offsets: [0; 4],
+        ao: [3; 4],
+        light: Default::default(),
+    };
+
+    // The face opposite the surface is the floor of the cell, flat on
+    // the block boundary however shallow the column is.
+    if face == info.face.opposite() {
+        return Some(entry);
+    }
+
+    let (a_idx, b_idx) = cross_axes(info.face.axis());
+    let heights = unsafe {
+        fluid_corner_heights(
+            data,
+            idx,
+            info.id,
+            up_stride,
+            axis_strides[a_idx],
+            axis_strides[b_idx],
+        )
+    };
+    // Depth is measured from the surface face inward, so a shorter
+    // column pulls its vertices away from that face.
+    let sign = if info.face.is_positive() { 1 } else { -1 };
+
+    for (vertex, offset) in entry.corner_offsets.iter_mut().enumerate() {
+        // Where this mask-local vertex sits on each axis.
+        let mut positive = [false; 3];
+        positive[u_idx] = vertex == 1 || vertex == 2;
+        positive[v_idx] = vertex == 2 || vertex == 3;
+        positive[normal_idx] = face.is_positive();
+
+        // On a side face only the two vertices at the surface end ride
+        // the height field; the other two stay on the cell floor. On the
+        // surface face itself the normal is the fluid axis, so all four
+        // ride it.
+        if face.axis().index() != up_idx && positive[up_idx] != info.face.is_positive() {
+            continue;
+        }
+
+        let height = heights[corner_index(positive[a_idx], positive[b_idx])] as i32;
+        *offset = ((height - FULL_THICKNESS as i32) * sign) as i8;
+    }
+
+    Some(entry)
+}
+
 /// Whether a block's shape fills the given face (whole blocks always,
 /// slabs only on their flush face, others never).
 #[inline]
@@ -532,6 +804,10 @@ fn shape_fills_face<B: Block>(block: &B, face: AlignedFace) -> bool {
     match block.shape() {
         Shape::WholeBlock => true,
         Shape::Slab(info) => info.face == face,
+        // The declared height, not the effective one: this is only
+        // consulted for AO, where the neighbor context needed to raise a
+        // submerged column is not on hand and the difference is a shade.
+        Shape::Fluid(info) => info.height >= FULL_THICKNESS,
         _ => false,
     }
 }
@@ -739,16 +1015,23 @@ fn emit_quad<B: Block>(
     origin[u_idx] = u_block * ft32 + entry.u_intra_offset as u32;
     origin[v_idx] = v_block * ft32 + entry.v_intra_offset as u32;
 
-    // Reorder AO and light from mask-local order [umin/vmin, umax/vmin,
-    // umax/vmax, umin/vmax] to match the vertex order from positions().
-    let (ao, light) = if face.tangent_cross_positive() {
+    // Reorder AO, light and fluid offsets from mask-local order
+    // [umin/vmin, umax/vmin, umax/vmax, umin/vmax] to match the vertex
+    // order from positions().
+    let (corner_offsets, ao, light) = if face.tangent_cross_positive() {
         // positions(): [base, base+du, base+du+dv, base+dv]
         // = [umin/vmin, umax/vmin, umax/vmax, umin/vmax]
-        (entry.ao, entry.light)
+        (entry.corner_offsets, entry.ao, entry.light)
     } else {
         // positions(): [base, base+dv, base+dv+du, base+du]
         // = [umin/vmin, umin/vmax, umax/vmax, umax/vmin]
         (
+            [
+                entry.corner_offsets[0],
+                entry.corner_offsets[3],
+                entry.corner_offsets[2],
+                entry.corner_offsets[1],
+            ],
             [entry.ao[0], entry.ao[3], entry.ao[2], entry.ao[1]],
             [
                 entry.light[0],
@@ -765,6 +1048,7 @@ fn emit_quad<B: Block>(
             width * entry.u_intra_extent as u32,
             height * entry.v_intra_extent as u32,
         ),
+        corner_offsets,
         ao,
         light,
     }
@@ -805,6 +1089,7 @@ fn emit_cross_quads<B: Block>(
         quads.diagonals[diag.index()].push(Quad {
             origin_padded: UVec3::new(origin[0], origin[1], origin[2]),
             size: UVec2::new(ft32, merge_len * ft32),
+            corner_offsets: [0; 4],
             ao,
             light,
         });
@@ -929,6 +1214,7 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
                                     u_intra_extent: ft,
                                     v_intra_offset: 0,
                                     v_intra_extent: ft,
+                                    corner_offsets: [0; 4],
                                     ao: [3; 4],
                                     light: Default::default(),
                                 })
@@ -955,6 +1241,34 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
                         }
                         Shape::Slab(_) => {
                             compute_slab_mask_entry(block, neighbor, face, u_idx, v_idx)
+                        }
+                        Shape::Fluid(info) => {
+                            debug_assert!(
+                                B::FLUID_ENABLED,
+                                "Shape::Fluid requires Block::FLUID_ENABLED"
+                            );
+                            if B::FLUID_ENABLED {
+                                // SAFETY: `idx` is an inner cell, so the
+                                // 3x3 of columns around it and one step
+                                // along the fluid axis are inside the
+                                // padding ring.
+                                unsafe {
+                                    compute_fluid_mask_entry(
+                                        data,
+                                        idx,
+                                        block,
+                                        neighbor,
+                                        info,
+                                        face,
+                                        normal_idx,
+                                        u_idx,
+                                        v_idx,
+                                        S::PADDED,
+                                    )
+                                }
+                            } else {
+                                None
+                            }
                         }
                     };
 
@@ -1010,6 +1324,16 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
                     let mut height = 1;
 
                     if greedy {
+                        // A fluid needs no special case here, because
+                        // `corner_offsets` is part of a mask entry's
+                        // identity. Two cells that merge have equal
+                        // offsets, and the vertex between them is one
+                        // vertex, so the offsets they each give it must
+                        // agree — which forces the run to be flat along
+                        // the direction it merges in. Standing water
+                        // merges like stone; a slope cannot merge at
+                        // all, and never silently loses its crease.
+                        //
                         // Find widest run of identical entries along u.
                         // Sub-block u extents (slabs) must not merge along u.
                         if entry.u_intra_extent == ft {

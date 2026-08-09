@@ -172,7 +172,7 @@ fn facade_voxel_position_is_correct() {
 fn facade_texture_coordinates_span_one() {
     let q = mesh_block(&TestBlock::Ladder, ());
     let quad = &q.faces[AlignedFace::PosX.index()][0];
-    let uvs = quad.texture_coordinates(AlignedFace::PosX, Axis::X, false);
+    let uvs = quad.texture_coordinates(AlignedFace::PosX, Shape::WholeBlock, Axis::X, false);
 
     let u_min = uvs.iter().map(|uv| uv.x).fold(f32::INFINITY, f32::min);
     let u_max = uvs.iter().map(|uv| uv.x).fold(f32::NEG_INFINITY, f32::max);

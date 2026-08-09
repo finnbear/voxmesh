@@ -212,7 +212,7 @@ fn bench_voxmesh_vertices(b: &mut Bencher, chunk: &PaddedChunk16<VmBlock>) {
         for qf in Face::ALL {
             for quad in quads.get(qf) {
                 let positions = quad.positions(qf, Shape::WholeBlock);
-                let uvs = quad.texture_coordinates(qf, Axis::X, false);
+                let uvs = quad.texture_coordinates(qf, Shape::WholeBlock, Axis::X, false);
                 test::black_box(&positions);
                 test::black_box(&uvs);
             }
