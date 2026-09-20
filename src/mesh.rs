@@ -1,6 +1,8 @@
 use glam::{UVec2, UVec3, Vec2, Vec3};
 
-use crate::block::{Block, CrossInfo, CullMode, FluidInfo, Shape, Thickness, FULL_THICKNESS};
+use crate::block::{
+    Block, CrossInfo, CullMode, FluidInfo, Shape, StairInfo, Thickness, FULL_THICKNESS,
+};
 use crate::chunk::{ChunkShape, PaddedChunk, PADDING};
 use crate::face::{AlignedFace, Axis, DiagonalFace, Face};
 use crate::light::Light;
@@ -314,6 +316,13 @@ pub struct Quads<L: Light = ()> {
     pub faces: [Vec<Quad<L>>; 6],
     /// Diagonal quads for X-shaped cross blocks, indexed by [`DiagonalFace`].
     pub diagonals: [Vec<Quad<L>>; 2],
+    /// The fluid standing in cells whose shape is something else — see
+    /// [`Block::fluid`] — indexed by [`AlignedFace`]. Kept apart from
+    /// [`faces`](Self::faces) because the consumer draws them as the fluid
+    /// and the cell's own quads as the solid, and
+    /// [`voxel_position`](Quad::voxel_position) leads to a cell holding
+    /// both. Empty unless [`Block::FLUID_ENABLED`].
+    pub fluid: [Vec<Quad<L>>; 6],
 }
 
 // Greedy meshing internals
@@ -365,55 +374,308 @@ fn face_axis_indices(face: AlignedFace) -> (usize, usize, usize) {
     }
 }
 
-/// Whether the neighbor fully covers the block's face region on the
-/// shared boundary. For whole-blocks this is trivial. For slabs, checks
-/// whether the neighbor occupies at least the same sub-region along the
-/// slab axis.
-#[inline]
-fn neighbor_covers_face_region<B: Block>(block: &B, neighbor: &B, face: AlignedFace) -> bool {
-    match neighbor.shape() {
-        Shape::WholeBlock => true,
-        // Cross and facade blocks never cover any face region.
-        Shape::Cross(_) | Shape::Facade(_) => false,
-        // Inset blocks cover top/bottom (flush) but not sides (inset).
-        Shape::Inset(_) => face.axis() == Axis::Y,
-        Shape::Fluid(n_info) => {
-            // The same fluid stitches its surface onto ours, so there is
-            // never a gap behind the shared face however deep either
-            // column happens to be. A different fluid only covers the
-            // region when it fills its cell.
-            if let Shape::Fluid(b_info) = block.shape() {
-                if b_info.id == n_info.id {
-                    return true;
-                }
+/// A rectangle on a face plane, in 1/16ths along that face's `(u, v)`
+/// tangents ([`face_axis_indices`]). Half-open: `u0 <= u < u1`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Rect16 {
+    u0: u8,
+    u1: u8,
+    v0: u8,
+    v1: u8,
+}
+
+impl Rect16 {
+    const FULL: Rect16 = Rect16 {
+        u0: 0,
+        u1: FULL_THICKNESS as u8,
+        v0: 0,
+        v1: FULL_THICKNESS as u8,
+    };
+
+    #[inline]
+    fn is_full(&self) -> bool {
+        *self == Self::FULL
+    }
+
+    #[inline]
+    fn contains(&self, other: &Rect16) -> bool {
+        self.u0 <= other.u0 && other.u1 <= self.u1 && self.v0 <= other.v0 && other.v1 <= self.v1
+    }
+
+    /// A strip that is full along one tangent and `[lo, hi)` along the
+    /// other, the axis of the strip given as an index into `(u, v)`.
+    #[inline]
+    fn strip(along_v: bool, lo: u8, hi: u8) -> Rect16 {
+        if along_v {
+            Rect16 {
+                u0: 0,
+                u1: FULL_THICKNESS as u8,
+                v0: lo,
+                v1: hi,
             }
-            n_info.height >= FULL_THICKNESS
-        }
-        Shape::Slab(n_info) => {
-            // The neighbor slab is flush against our face only if its
-            // slab face equals our face's opposite.
-            if n_info.face == face.opposite() {
-                return true;
+        } else {
+            Rect16 {
+                u0: lo,
+                u1: hi,
+                v0: 0,
+                v1: FULL_THICKNESS as u8,
             }
-            // For side faces: if the block is also a slab on the same axis
-            // and the neighbor covers at least the block's extent, it culls.
-            if let Shape::Slab(b_info) = block.shape() {
-                if b_info.face.axis() == n_info.face.axis() && face.axis() != b_info.face.axis() {
-                    // Both slabs share the same axis. The neighbor covers
-                    // our region if its thickness >= ours on the same side.
-                    return b_info.face == n_info.face && n_info.thickness >= b_info.thickness;
-                }
-            }
-            false
         }
     }
 }
 
-/// Whether the current block's face is culled by the given neighbor.
-/// Only valid for faces at the block boundary (flush or side).
+/// The part of `face`'s boundary plane that `block` is flush against —
+/// up to two rectangles, since a stair's side is an L.
+///
+/// This is the one place a shape says what it seals, and everything that
+/// asks "is there something solid on the other side of this face" reads
+/// it: culling (does the neighbor hide this quad), ambient occlusion (does
+/// the neighbor darken this vertex). A new shape joins by answering here.
 #[inline]
-fn is_culled_at_boundary<B: Block>(block: &B, neighbor: &B, face: AlignedFace) -> bool {
-    if !neighbor_covers_face_region(block, neighbor, face) {
+fn boundary_footprint<B: Block>(block: &B, face: AlignedFace) -> [Option<Rect16>; 2] {
+    let ft = FULL_THICKNESS as u8;
+    let (_, u_idx, v_idx) = face_axis_indices(face);
+    match block.shape() {
+        Shape::WholeBlock => [Some(Rect16::FULL), None],
+        // Cross and facade blocks never cover any face region.
+        Shape::Cross(_) | Shape::Facade(_) => [None; 2],
+        // Inset blocks cover top/bottom (flush) but not sides (inset).
+        Shape::Inset(_) => {
+            if face.axis() == Axis::Y {
+                [Some(Rect16::FULL), None]
+            } else {
+                [None; 2]
+            }
+        }
+        // The declared height: a fluid seals a face only when it fills its
+        // cell. A neighbor of the same fluid is handled by the caller,
+        // which stitches to it whatever the height.
+        Shape::Fluid(info) => {
+            if info.height >= FULL_THICKNESS {
+                [Some(Rect16::FULL), None]
+            } else {
+                [None; 2]
+            }
+        }
+        Shape::Slab(info) => {
+            let axis = info.face.axis().index();
+            let thickness = info.thickness as u8;
+            if face == info.face {
+                [Some(Rect16::FULL), None]
+            } else if face.axis() == info.face.axis() {
+                // The inner face is inset, never at the boundary.
+                [None; 2]
+            } else {
+                let (lo, hi) = if info.face.is_positive() {
+                    (ft - thickness, ft)
+                } else {
+                    (0, thickness)
+                };
+                [Some(Rect16::strip(axis == v_idx, lo, hi)), None]
+            }
+        }
+        Shape::Stair(info) => {
+            debug_assert_ne!(
+                info.floor.axis(),
+                info.back.axis(),
+                "a stair's floor and back must be perpendicular"
+            );
+            let half = ft / 2;
+            let floor_axis = info.floor.axis().index();
+            let back_axis = info.back.axis().index();
+            // The floor half and the far half along the floor axis, and
+            // the back half along the back axis, as 1/16th ranges.
+            let (floor_lo, floor_hi, far_lo, far_hi) = if info.floor.is_positive() {
+                (half, ft, 0, half)
+            } else {
+                (0, half, half, ft)
+            };
+            let (back_lo, back_hi) = if info.back.is_positive() {
+                (half, ft)
+            } else {
+                (0, half)
+            };
+            if face == info.floor || face == info.back {
+                // The slab fills the floor face; the slab and the step
+                // between them fill the back face.
+                [Some(Rect16::FULL), None]
+            } else if face == info.floor.opposite() {
+                // The step's top, on the back half.
+                [
+                    Some(Rect16::strip(back_axis == v_idx, back_lo, back_hi)),
+                    None,
+                ]
+            } else if face == info.back.opposite() {
+                // The slab's front, on the floor half.
+                [
+                    Some(Rect16::strip(floor_axis == v_idx, floor_lo, floor_hi)),
+                    None,
+                ]
+            } else {
+                // A side: the slab's strip and the step's quarter, an L.
+                let slab = Rect16::strip(floor_axis == v_idx, floor_lo, floor_hi);
+                let step = if floor_axis == u_idx {
+                    Rect16 {
+                        u0: far_lo,
+                        u1: far_hi,
+                        v0: back_lo,
+                        v1: back_hi,
+                    }
+                } else {
+                    Rect16 {
+                        u0: back_lo,
+                        u1: back_hi,
+                        v0: far_lo,
+                        v1: far_hi,
+                    }
+                };
+                [Some(slab), Some(step)]
+            }
+        }
+    }
+}
+
+/// Whether `footprint` covers all of `rect`: inside one of its rectangles,
+/// or — the footprint being an L — inside their union with the split
+/// running straight across. Anything cleverer than that is answered `false`,
+/// which costs a quad that could have been culled and never hides one that
+/// should show.
+#[inline]
+fn footprint_covers(footprint: &[Option<Rect16>; 2], rect: &Rect16) -> bool {
+    match footprint {
+        [None, _] => false,
+        [Some(a), None] => a.contains(rect),
+        [Some(a), Some(b)] => {
+            if a.contains(rect) || b.contains(rect) {
+                return true;
+            }
+            // Take what `a` covers of `rect` off it; if what is left is one
+            // rectangle, ask `b` for that.
+            let rest = if a.v0 <= rect.v0 && rect.v1 <= a.v1 {
+                // `a` spans `rect` in v: it may cut off a u-end.
+                if a.u0 <= rect.u0 && a.u1 > rect.u0 && a.u1 < rect.u1 {
+                    Some(Rect16 { u0: a.u1, ..*rect })
+                } else if a.u1 >= rect.u1 && a.u0 < rect.u1 && a.u0 > rect.u0 {
+                    Some(Rect16 { u1: a.u0, ..*rect })
+                } else {
+                    None
+                }
+            } else if a.u0 <= rect.u0 && rect.u1 <= a.u1 {
+                if a.v0 <= rect.v0 && a.v1 > rect.v0 && a.v1 < rect.v1 {
+                    Some(Rect16 { v0: a.v1, ..*rect })
+                } else if a.v1 >= rect.v1 && a.v0 < rect.v1 && a.v0 > rect.v0 {
+                    Some(Rect16 { v1: a.v0, ..*rect })
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            rest.is_some_and(|rest| b.contains(&rest))
+        }
+    }
+}
+
+/// The part of the face plane `footprint` leaves open, as one rectangle:
+/// the whole face for an empty footprint, nothing for a full one, the other
+/// strip beside a strip, the open quadrant of a stair's L. `None` when
+/// nothing is open.
+///
+/// Computed on the grid the rectangles' edges cut the face into, so it is
+/// exact for anything whose complement *is* one rectangle — which every
+/// shape here satisfies, the footprints all being anchored to the face's
+/// edges. A footprint whose complement is more than one rectangle (none
+/// exists) would be answered with the first, and debug-asserts.
+fn uncovered(footprint: &[Option<Rect16>; 2]) -> Option<Rect16> {
+    let ft = FULL_THICKNESS as u8;
+    let mut us = [0u8, ft, ft, ft, ft, ft];
+    let mut vs = [0u8, ft, ft, ft, ft, ft];
+    let mut n = 2;
+    for rect in footprint.iter().flatten() {
+        us[n] = rect.u0;
+        us[n + 1] = rect.u1;
+        vs[n] = rect.v0;
+        vs[n + 1] = rect.v1;
+        n += 2;
+    }
+    us.sort_unstable();
+    vs.sort_unstable();
+    let covered = |u: u8, v: u8| {
+        footprint
+            .iter()
+            .flatten()
+            .any(|r| r.u0 <= u && u < r.u1 && r.v0 <= v && v < r.v1)
+    };
+    let mut open: Option<Rect16> = None;
+    for i in 0..us.len() - 1 {
+        for j in 0..vs.len() - 1 {
+            let (u0, u1, v0, v1) = (us[i], us[i + 1], vs[j], vs[j + 1]);
+            if u0 == u1 || v0 == v1 || covered(u0, v0) {
+                continue;
+            }
+            open = Some(match open {
+                None => Rect16 { u0, u1, v0, v1 },
+                Some(r) => {
+                    // The open cells so far and this one must together be
+                    // a rectangle: extend the bounds, and check the result
+                    // holds no covered cell.
+                    let grown = Rect16 {
+                        u0: r.u0.min(u0),
+                        u1: r.u1.max(u1),
+                        v0: r.v0.min(v0),
+                        v1: r.v1.max(v1),
+                    };
+                    debug_assert!(
+                        !covered(grown.u0, grown.v0)
+                            && !covered(grown.u1 - 1, grown.v0)
+                            && !covered(grown.u0, grown.v1 - 1)
+                            && !covered(grown.u1 - 1, grown.v1 - 1),
+                        "a footprint whose complement is not one rectangle"
+                    );
+                    grown
+                }
+            });
+        }
+    }
+    open
+}
+
+/// Whether the neighbor fully covers `rect` of the block's `face` on the
+/// shared boundary.
+#[inline]
+fn neighbor_covers_face_region<B: Block>(
+    block: &B,
+    neighbor: &B,
+    face: AlignedFace,
+    rect: &Rect16,
+) -> bool {
+    // The same fluid stitches its surface onto ours, so there is never a
+    // gap behind the shared face however deep either column happens to
+    // be — and a fluid standing in a solid's cell counts, since it is the
+    // same body of water. Only for a fluid's *own* quads, though: a
+    // waterlogged slab's stone still has to show where the neighbor's
+    // stone doesn't reach.
+    if let (Shape::Fluid(b_info), Some(n_info)) = (block.shape(), neighbor.fluid()) {
+        if b_info.id == n_info.id {
+            return true;
+        }
+    }
+    // The neighbor's footprint on its side of the plane, which lies on the
+    // same (u, v) axes as ours: opposite faces share tangents.
+    footprint_covers(&boundary_footprint(neighbor, face.opposite()), rect)
+}
+
+/// Whether the current block's face is culled by the given neighbor.
+/// Only valid for faces at the block boundary (flush or side); `rect` is
+/// the part of the face the quad in question occupies.
+#[inline]
+fn is_culled_at_boundary<B: Block>(
+    block: &B,
+    neighbor: &B,
+    face: AlignedFace,
+    rect: &Rect16,
+) -> bool {
+    if !neighbor_covers_face_region(block, neighbor, face, rect) {
         return false;
     }
     match (block.cull_mode(), neighbor.cull_mode()) {
@@ -426,9 +688,128 @@ fn is_culled_at_boundary<B: Block>(block: &B, neighbor: &B, face: AlignedFace) -
     }
 }
 
+/// The rectangle a mask entry occupies on its face, in `(u, v)`.
+#[inline]
+fn entry_rect<B: Block>(entry: &MaskEntry<B>) -> Rect16 {
+    Rect16 {
+        u0: entry.u_intra_offset,
+        u1: entry.u_intra_offset + entry.u_intra_extent,
+        v0: entry.v_intra_offset,
+        v1: entry.v_intra_offset + entry.v_intra_extent,
+    }
+}
+
+/// A mask entry with the given plane depth and `(u, v)` rectangle, and no
+/// lighting yet.
+#[inline]
+fn entry_at<B: Block>(block: &B, normal_pos: u8, rect: Rect16) -> MaskEntry<B> {
+    MaskEntry {
+        block: *block,
+        normal_pos,
+        u_intra_offset: rect.u0,
+        u_intra_extent: rect.u1 - rect.u0,
+        v_intra_offset: rect.v0,
+        v_intra_extent: rect.v1 - rect.v0,
+        corner_offsets: [0; 4],
+        ao: [3; 4],
+        light: Default::default(),
+    }
+}
+
+/// The up-to-two quads a stair shows on `face`, by shape alone — no
+/// neighbor culling. Each is `(entry, at_boundary)`: the boundary ones are
+/// the caller's to cull, the inset ones (the tread's inner half and the
+/// riser) never are.
+///
+/// The stair is its two boxes, the slab and the step, and each face is
+/// what the two of them together present to it:
+///
+/// - the floor face and the back face are full, at the boundary;
+/// - opposite the floor, the slab's exposed top (inset, front half) and
+///   the step's top (boundary, back half);
+/// - opposite the back, the slab's front (boundary, floor half) and the
+///   riser (inset, far half);
+/// - the two sides, an L at the boundary: the slab's strip and the step's
+///   quarter.
+#[inline]
+fn stair_entries<B: Block>(
+    block: &B,
+    info: StairInfo,
+    face: AlignedFace,
+    u_idx: usize,
+    v_idx: usize,
+) -> [Option<(MaskEntry<B>, bool)>; 2] {
+    let ft = FULL_THICKNESS as u8;
+    let half = ft / 2;
+    let floor_axis = info.floor.axis().index();
+    let back_axis = info.back.axis().index();
+    let (floor_lo, floor_hi, far_lo, far_hi) = if info.floor.is_positive() {
+        (half, ft, 0, half)
+    } else {
+        (0, half, half, ft)
+    };
+    let (back_lo, back_hi, front_lo, front_hi) = if info.back.is_positive() {
+        (half, ft, 0, half)
+    } else {
+        (0, half, half, ft)
+    };
+    let boundary = if face.is_positive() { ft } else { 0 };
+    // The plane halfway along an axis, seen from `face`'s side.
+    let inset = half;
+    if face == info.floor || face == info.back {
+        [Some((entry_at(block, boundary, Rect16::FULL), true)), None]
+    } else if face == info.floor.opposite() {
+        let along_v = back_axis == v_idx;
+        [
+            Some((
+                entry_at(block, inset, Rect16::strip(along_v, front_lo, front_hi)),
+                false,
+            )),
+            Some((
+                entry_at(block, boundary, Rect16::strip(along_v, back_lo, back_hi)),
+                true,
+            )),
+        ]
+    } else if face == info.back.opposite() {
+        let along_v = floor_axis == v_idx;
+        [
+            Some((
+                entry_at(block, boundary, Rect16::strip(along_v, floor_lo, floor_hi)),
+                true,
+            )),
+            Some((
+                entry_at(block, inset, Rect16::strip(along_v, far_lo, far_hi)),
+                false,
+            )),
+        ]
+    } else {
+        let slab = Rect16::strip(floor_axis == v_idx, floor_lo, floor_hi);
+        let step = if floor_axis == u_idx {
+            Rect16 {
+                u0: far_lo,
+                u1: far_hi,
+                v0: back_lo,
+                v1: back_hi,
+            }
+        } else {
+            Rect16 {
+                u0: back_lo,
+                u1: back_hi,
+                v0: far_lo,
+                v1: far_hi,
+            }
+        };
+        [
+            Some((entry_at(block, boundary, slab), true)),
+            Some((entry_at(block, boundary, step), true)),
+        ]
+    }
+}
+
 /// Compute the mask entry for a block/face based purely on shape,
 /// ignoring neighbor culling. Returns `None` for faces that never
-/// emit geometry (cross blocks, non-matching facades, etc.).
+/// emit geometry (cross blocks, non-matching facades, etc.). A stair
+/// has up to two; this is the first, and [`stair_entries`] has both.
 #[inline]
 fn mask_entry_for_shape<B: Block>(
     block: &B,
@@ -440,6 +821,9 @@ fn mask_entry_for_shape<B: Block>(
     match block.shape() {
         // Cross blocks have no axis-aligned faces.
         Shape::Cross(_) => return None,
+        Shape::Stair(info) => {
+            return stair_entries(block, info, face, u_idx, v_idx)[0].map(|(entry, _)| entry)
+        }
         // Facade emits one quad on its own face, offset `info.offset`
         // sixteenths inward.
         Shape::Facade(info) => {
@@ -581,22 +965,18 @@ fn compute_slab_mask_entry<B: Block>(
         | Shape::Cross(_)
         | Shape::Facade(_)
         | Shape::Inset(_)
+        | Shape::Stair(_)
         | Shape::Fluid(_) => unreachable!(),
     };
 
-    // Flush face along the slab's own axis: check neighbor culling.
-    if face.axis() == info.face.axis() && face == info.face {
-        if is_culled_at_boundary(block, neighbor, face) {
-            return None;
-        }
-    } else if face.axis() != info.face.axis() {
-        // Side faces: normal neighbor culling.
-        if is_culled_at_boundary(block, neighbor, face) {
-            return None;
-        }
+    let entry = mask_entry_for_shape(block, face, u_idx, v_idx)?;
+    // The flush face and the sides are at the boundary and the neighbor
+    // may hide them; the inner face is inset and never is.
+    let at_boundary = face == info.face || face.axis() != info.face.axis();
+    if at_boundary && is_culled_at_boundary(block, neighbor, face, &entry_rect(&entry)) {
+        return None;
     }
-
-    mask_entry_for_shape(block, face, u_idx, v_idx)
+    Some(entry)
 }
 
 /// The [`FluidInfo`] of the block at `idx`, or `None` if it is not a
@@ -608,10 +988,11 @@ fn compute_slab_mask_entry<B: Block>(
 #[inline]
 unsafe fn fluid_at<B: Block>(data: &[B], idx: usize, id: u8) -> Option<FluidInfo> {
     debug_assert!(idx < data.len(), "fluid neighborhood escaped the chunk");
-    match unsafe { data.get_unchecked(idx) }.shape() {
-        Shape::Fluid(info) if info.id == id => Some(info),
-        _ => None,
-    }
+    // Through `fluid`, not `shape`: a waterlogged cell is part of the
+    // body of water for every purpose the height field has.
+    unsafe { data.get_unchecked(idx) }
+        .fluid()
+        .filter(|info| info.id == id)
 }
 
 /// How much of the cell at `idx` the fluid `id` occupies, in 1/16ths, or
@@ -728,6 +1109,34 @@ unsafe fn compute_fluid_mask_entry<B: Block>(
         -axis_strides[up_idx]
     };
 
+    // A fluid standing in a solid's cell — the overlay — is hidden by the
+    // solid's own faces before it is hidden by anything next door: the
+    // water in a bottom slab has no underside to draw. And it is culled
+    // by the neighbor on the fluid's terms, not the solid's: the same
+    // fluid next door joins it, an opaque neighbor that seals the face
+    // hides it, and nothing else does. The solid's cull mode would say
+    // "opaque against transparent, draw" and put a water face inside the
+    // pond.
+    let overlay = !matches!(block.shape(), Shape::Fluid(_));
+    // The part of the face the fluid shows: all of it for a fluid cell,
+    // and for water in a solid's cell whatever the solid leaves open — the
+    // strip above a slab, the quadrant beside a stair's step. Clipped
+    // rather than drawn whole and hidden by depth, so the water never
+    // shares a plane with the solid's own quad.
+    let open = if overlay {
+        uncovered(&boundary_footprint(block, face))?
+    } else {
+        Rect16::FULL
+    };
+    let culled = |face: AlignedFace| {
+        if overlay {
+            neighbor.fluid().is_some_and(|n| n.id == info.id)
+                || (matches!(neighbor.cull_mode(), CullMode::Opaque)
+                    && footprint_covers(&boundary_footprint(neighbor, face.opposite()), &open))
+        } else {
+            is_culled_at_boundary(block, neighbor, face, &Rect16::FULL)
+        }
+    };
     if face == info.face {
         // The surface sits inside the block whenever the column is not
         // full, so whatever is above cannot hide it: water at half
@@ -735,24 +1144,14 @@ unsafe fn compute_fluid_mask_entry<B: Block>(
         // a full column is flush enough to be culled at the boundary.
         let full = unsafe { fluid_height(data, idx, info.id, up_stride) }
             .is_some_and(|height| height >= FULL_THICKNESS);
-        if full && is_culled_at_boundary(block, neighbor, face) {
+        if full && culled(face) {
             return None;
         }
-    } else if is_culled_at_boundary(block, neighbor, face) {
+    } else if culled(face) {
         return None;
     }
 
-    let mut entry = MaskEntry {
-        block: *block,
-        normal_pos: if face.is_positive() { ft } else { 0 },
-        u_intra_offset: 0,
-        u_intra_extent: ft,
-        v_intra_offset: 0,
-        v_intra_extent: ft,
-        corner_offsets: [0; 4],
-        ao: [3; 4],
-        light: Default::default(),
-    };
+    let mut entry = entry_at(block, if face.is_positive() { ft } else { 0 }, open);
 
     // The face opposite the surface is the floor of the cell, flat on
     // the block boundary however shallow the column is.
@@ -801,15 +1200,11 @@ unsafe fn compute_fluid_mask_entry<B: Block>(
 /// slabs only on their flush face, others never).
 #[inline]
 fn shape_fills_face<B: Block>(block: &B, face: AlignedFace) -> bool {
-    match block.shape() {
-        Shape::WholeBlock => true,
-        Shape::Slab(info) => info.face == face,
-        // The declared height, not the effective one: this is only
-        // consulted for AO, where the neighbor context needed to raise a
-        // submerged column is not on hand and the difference is a shade.
-        Shape::Fluid(info) => info.height >= FULL_THICKNESS,
-        _ => false,
-    }
+    // The footprint's declared coverage — for a fluid, the declared
+    // height, not the effective one: this is only consulted for AO, where
+    // the neighbor context needed to raise a submerged column is not on
+    // hand and the difference is a shade.
+    boundary_footprint(block, face)[0].is_some_and(|rect| rect.is_full())
 }
 
 /// Whether a block occludes AO on the given face: material is
@@ -911,6 +1306,7 @@ impl<L: Light> Quads<L> {
         Quads {
             faces: [vec![], vec![], vec![], vec![], vec![], vec![]],
             diagonals: [vec![], vec![]],
+            fluid: [vec![], vec![], vec![], vec![], vec![], vec![]],
         }
     }
 
@@ -922,12 +1318,17 @@ impl<L: Light> Quads<L> {
         for diag in &mut self.diagonals {
             diag.clear();
         }
+        for face in &mut self.fluid {
+            face.clear();
+        }
     }
 
-    /// Total number of quads across all faces (including diagonals).
+    /// Total number of quads across all faces (including diagonals and
+    /// fluid overlays).
     pub fn total(&self) -> usize {
         self.faces.iter().map(|v| v.len()).sum::<usize>()
             + self.diagonals.iter().map(|v| v.len()).sum::<usize>()
+            + self.fluid.iter().map(|v| v.len()).sum::<usize>()
     }
 
     /// Returns the quad list for the given [`Face`].
@@ -1096,6 +1497,91 @@ fn emit_cross_quads<B: Block>(
     }
 }
 
+/// Emits one layer's mask into `out`, greedily merging runs of identical
+/// entries when asked to, and clears it as it goes.
+///
+/// A fluid needs no special case here, because `corner_offsets` is part
+/// of a mask entry's identity. Two cells that merge have equal offsets,
+/// and the vertex between them is one vertex, so the offsets they each
+/// give it must agree — which forces the run to be flat along the
+/// direction it merges in. Standing water merges like stone; a slope
+/// cannot merge at all, and never silently loses its crease.
+#[allow(clippy::too_many_arguments)]
+#[inline]
+fn emit_mask<B: Block, S: ChunkShape>(
+    mask: &mut [[Option<MaskEntry<B>>; S::SIZE]; S::SIZE],
+    greedy: bool,
+    out: &mut Vec<Quad<B::Light>>,
+    normal_idx: usize,
+    u_idx: usize,
+    v_idx: usize,
+    layer: usize,
+    face: AlignedFace,
+) where
+    [(); S::SIZE]:,
+{
+    let ft = FULL_THICKNESS as u8;
+    for v in 0..S::SIZE {
+        let mut u = 0;
+        while u < S::SIZE {
+            let entry = match mask[v][u] {
+                Some(e) => e,
+                None => {
+                    u += 1;
+                    continue;
+                }
+            };
+
+            let mut width = 1;
+            let mut height = 1;
+
+            if greedy {
+                // Find widest run of identical entries along u.
+                // Sub-block u extents (slabs, stairs) must not merge along u.
+                if entry.u_intra_extent == ft {
+                    while u + width < S::SIZE && mask[v][u + width] == Some(entry) {
+                        width += 1;
+                    }
+                }
+
+                // Extend the run along v.
+                // Sub-block v extents (slabs, stairs) must not merge along v.
+                if entry.v_intra_extent == ft {
+                    'extend: while v + height < S::SIZE {
+                        for du in 0..width {
+                            if mask[v + height][u + du] != Some(entry) {
+                                break 'extend;
+                            }
+                        }
+                        height += 1;
+                    }
+                }
+            }
+
+            // Clear the merged region.
+            for dv in 0..height {
+                for du in 0..width {
+                    mask[v + dv][u + du] = None;
+                }
+            }
+
+            out.push(emit_quad(
+                &entry,
+                normal_idx,
+                u_idx,
+                v_idx,
+                (PADDING + layer) as u32,
+                (PADDING + u) as u32,
+                (PADDING + v) as u32,
+                width as u32,
+                height as u32,
+                face,
+            ));
+            u += width;
+        }
+    }
+}
+
 /// Meshes a single block with all faces exposed (no neighbor culling).
 ///
 /// `light` is applied uniformly to all vertices; AO is disabled.
@@ -1129,7 +1615,13 @@ pub fn mesh_block_into<B: Block>(
     for face in AlignedFace::ALL {
         let (normal_idx, u_idx, v_idx) = face_axis_indices(face);
 
-        if let Some(mut entry) = mask_entry_for_shape(block, face, u_idx, v_idx) {
+        // A stair shows two quads on some faces; everything else one.
+        let entries = match block.shape() {
+            Shape::Stair(info) => stair_entries(block, info, face, u_idx, v_idx)
+                .map(|part| part.map(|(entry, _)| entry)),
+            _ => [mask_entry_for_shape(block, face, u_idx, v_idx), None],
+        };
+        for mut entry in entries.into_iter().flatten() {
             entry.light = [avg; 4];
             let quad = emit_quad(
                 &entry,
@@ -1164,9 +1656,14 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
     let ft = FULL_THICKNESS as u8;
     let data = &chunk.data;
 
-    // Mask is hoisted outside the layer loop. The build phase overwrites
-    // every cell unconditionally so previous values do not matter.
+    // Masks are hoisted outside the layer loop. The build phase overwrites
+    // every cell unconditionally so previous values do not matter. Three
+    // per layer: the shape's quad, the second quad a stair shows on some
+    // faces, and the fluid standing in a solid's cell. The second two are
+    // sparse in practice and cost a `None` per cell when unused.
     let mut mask: [[Option<MaskEntry<B>>; S::SIZE]; S::SIZE] = [[None; S::SIZE]; S::SIZE];
+    let mut extra: [[Option<MaskEntry<B>>; S::SIZE]; S::SIZE] = [[None; S::SIZE]; S::SIZE];
+    let mut overlay: [[Option<MaskEntry<B>>; S::SIZE]; S::SIZE] = [[None; S::SIZE]; S::SIZE];
 
     for face in AlignedFace::ALL {
         let (normal_idx, u_idx, v_idx) = face_axis_indices(face);
@@ -1181,7 +1678,7 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
         for layer in 0..S::SIZE {
             let layer_base = (PADDING + layer) * n_stride + PADDING * u_stride + PADDING * v_stride;
 
-            // Build the 2D mask for this layer.
+            // Build the 2D masks for this layer.
             let mut v_base = layer_base;
             for v in 0..S::SIZE {
                 let mut idx = v_base;
@@ -1199,10 +1696,11 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
                     let shape = block.shape();
                     let is_facade = matches!(shape, Shape::Facade(_));
 
+                    let mut second = None;
                     let mut entry = match shape {
                         _ if !block.cull_mode().is_renderable() => None,
                         Shape::WholeBlock => {
-                            if is_culled_at_boundary(block, neighbor, face) {
+                            if is_culled_at_boundary(block, neighbor, face, &Rect16::FULL) {
                                 None
                             } else {
                                 // WholeBlock fast path: normal_pos is constant
@@ -1229,7 +1727,7 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
                         Shape::Inset(_) => {
                             if face.axis() == Axis::Y {
                                 // Top/bottom at boundary, normal culling.
-                                if is_culled_at_boundary(block, neighbor, face) {
+                                if is_culled_at_boundary(block, neighbor, face, &Rect16::FULL) {
                                     None
                                 } else {
                                     mask_entry_for_shape(block, face, u_idx, v_idx)
@@ -1241,6 +1739,25 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
                         }
                         Shape::Slab(_) => {
                             compute_slab_mask_entry(block, neighbor, face, u_idx, v_idx)
+                        }
+                        Shape::Stair(info) => {
+                            // Each of the two quads is culled on its own
+                            // rectangle; the inset ones never are.
+                            let keep = |part: Option<(MaskEntry<B>, bool)>| {
+                                part.filter(|(e, at_boundary)| {
+                                    !at_boundary
+                                        || !is_culled_at_boundary(
+                                            block,
+                                            neighbor,
+                                            face,
+                                            &entry_rect(e),
+                                        )
+                                })
+                                .map(|(e, _)| e)
+                            };
+                            let [first, next] = stair_entries(block, info, face, u_idx, v_idx);
+                            second = keep(next);
+                            keep(first)
                         }
                         Shape::Fluid(info) => {
                             debug_assert!(
@@ -1272,23 +1789,48 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
                         }
                     };
 
+                    // The fluid standing in a solid's cell. Not gated on
+                    // the solid being renderable: a consumer may draw the
+                    // solid some other way and still want its water.
+                    let mut fluid_entry = None;
+                    if B::FLUID_ENABLED && !matches!(shape, Shape::Fluid(_)) {
+                        if let Some(info) = block.fluid() {
+                            // SAFETY: as for `Shape::Fluid` above.
+                            fluid_entry = unsafe {
+                                compute_fluid_mask_entry(
+                                    data,
+                                    idx,
+                                    block,
+                                    neighbor,
+                                    info,
+                                    face,
+                                    normal_idx,
+                                    u_idx,
+                                    v_idx,
+                                    S::PADDED,
+                                )
+                            };
+                        }
+                    }
+
                     // Compute AO and smooth light for visible faces.
                     if B::Light::AO_ENABLED || B::Light::LIGHT_ENABLED {
-                        if let Some(ref mut e) = entry {
+                        let light_entry = |e: &mut MaskEntry<B>| {
                             // Faces inset into the block sample AO/light
                             // at the block's own plane rather than the
                             // neighbor's, and check the inset direction
-                            // for occlusion instead of the opposite.
-                            let is_slab_inset = matches!(shape, Shape::Slab(info) if face.axis() == info.face.axis() && face != info.face);
-                            let sample_idx = if is_facade || is_slab_inset {
-                                idx
+                            // for occlusion instead of the opposite,
+                            // since neighbors at the same level don't
+                            // protrude past the surface. A slab's inner
+                            // face, a stair's tread and riser.
+                            let inset = e.normal_pos != whole_normal_pos;
+                            let (sample_idx, ao_face) = if is_facade {
+                                (idx, face.opposite())
+                            } else if inset {
+                                (idx, face)
                             } else {
-                                n_idx
+                                (n_idx, face.opposite())
                             };
-                            // Slab inset faces check occlusion on the
-                            // inset direction since neighbors at the same
-                            // level don't protrude past the surface.
-                            let ao_face = if is_slab_inset { face } else { face.opposite() };
                             let (ao, light) = compute_ao_light(
                                 data,
                                 sample_idx,
@@ -1298,10 +1840,21 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
                             );
                             e.ao = ao;
                             e.light = light;
+                        };
+                        if let Some(ref mut e) = entry {
+                            light_entry(e);
+                        }
+                        if let Some(ref mut e) = second {
+                            light_entry(e);
+                        }
+                        if let Some(ref mut e) = fluid_entry {
+                            light_entry(e);
                         }
                     }
 
                     mask[v][u] = entry;
+                    extra[v][u] = second;
+                    overlay[v][u] = fluid_entry;
 
                     idx += u_stride;
                 }
@@ -1309,77 +1862,37 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
             }
 
             // Emit phase (with optional greedy merging).
-            for v in 0..S::SIZE {
-                let mut u = 0;
-                while u < S::SIZE {
-                    let entry = match mask[v][u] {
-                        Some(e) => e,
-                        None => {
-                            u += 1;
-                            continue;
-                        }
-                    };
-
-                    let mut width = 1;
-                    let mut height = 1;
-
-                    if greedy {
-                        // A fluid needs no special case here, because
-                        // `corner_offsets` is part of a mask entry's
-                        // identity. Two cells that merge have equal
-                        // offsets, and the vertex between them is one
-                        // vertex, so the offsets they each give it must
-                        // agree — which forces the run to be flat along
-                        // the direction it merges in. Standing water
-                        // merges like stone; a slope cannot merge at
-                        // all, and never silently loses its crease.
-                        //
-                        // Find widest run of identical entries along u.
-                        // Sub-block u extents (slabs) must not merge along u.
-                        if entry.u_intra_extent == ft {
-                            while u + width < S::SIZE && mask[v][u + width] == Some(entry) {
-                                width += 1;
-                            }
-                        }
-
-                        // Extend the run along v.
-                        // Sub-block v extents (slabs) must not merge along v.
-                        if entry.v_intra_extent == ft {
-                            'extend: while v + height < S::SIZE {
-                                for du in 0..width {
-                                    if mask[v + height][u + du] != Some(entry) {
-                                        break 'extend;
-                                    }
-                                }
-                                height += 1;
-                            }
-                        }
-                    }
-
-                    // Clear the merged region.
-                    for dv in 0..height {
-                        for du in 0..width {
-                            mask[v + dv][u + du] = None;
-                        }
-                    }
-
-                    // Emit the quad.
-                    let quad = emit_quad(
-                        &entry,
-                        normal_idx,
-                        u_idx,
-                        v_idx,
-                        (PADDING + layer) as u32,
-                        (PADDING + u) as u32,
-                        (PADDING + v) as u32,
-                        width as u32,
-                        height as u32,
-                        face,
-                    );
-
-                    quads.faces[face.index()].push(quad);
-                    u += width;
-                }
+            emit_mask::<B, S>(
+                &mut mask,
+                greedy,
+                &mut quads.faces[face.index()],
+                normal_idx,
+                u_idx,
+                v_idx,
+                layer,
+                face,
+            );
+            emit_mask::<B, S>(
+                &mut extra,
+                greedy,
+                &mut quads.faces[face.index()],
+                normal_idx,
+                u_idx,
+                v_idx,
+                layer,
+                face,
+            );
+            if B::FLUID_ENABLED {
+                emit_mask::<B, S>(
+                    &mut overlay,
+                    greedy,
+                    &mut quads.fluid[face.index()],
+                    normal_idx,
+                    u_idx,
+                    v_idx,
+                    layer,
+                    face,
+                );
             }
         }
     }

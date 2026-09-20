@@ -22,6 +22,9 @@ pub enum TestBlock {
     Cactus,    // Inset(1), horizontal faces inset by 1/16
     Chain,     // Cross(PosY, 0), hanging cross, merges along Y
     Vine,      // Cross(PosX, 0), wall-mounted cross, merges along X
+    Stair,     // Stair(floor NegY, back NegZ): on the floor, rising toward -Z
+    Corbel,    // Stair(floor PosY, back NegZ): the same stair hung from the ceiling
+    WallStair, // Stair(floor PosX, back NegY): on the +X wall, stepping down
 }
 
 impl Block for TestBlock {
@@ -78,6 +81,18 @@ impl Block for TestBlock {
                 offset: 1,
             }),
             TestBlock::Cactus => Shape::Inset(1),
+            TestBlock::Stair => Shape::Stair(StairInfo {
+                floor: AlignedFace::NegY,
+                back: AlignedFace::NegZ,
+            }),
+            TestBlock::Corbel => Shape::Stair(StairInfo {
+                floor: AlignedFace::PosY,
+                back: AlignedFace::NegZ,
+            }),
+            TestBlock::WallStair => Shape::Stair(StairInfo {
+                floor: AlignedFace::PosX,
+                back: AlignedFace::NegY,
+            }),
             _ => Shape::WholeBlock,
         }
     }

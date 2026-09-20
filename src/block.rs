@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use crate::face::AlignedFace;
+use crate::face::{AlignedFace, Axis};
 use crate::light::Light;
 
 /// How a block interacts with neighbor face culling.
@@ -93,6 +93,44 @@ pub struct FluidInfo {
     pub id: u8,
 }
 
+/// Configuration for a stair: a half-cell slab with a quarter-cell step on
+/// it.
+///
+/// Two perpendicular faces fix it completely. The slab is flush with
+/// [`floor`](Self::floor) and fills that half of the cell; the step stands
+/// on the slab, flush with [`back`](Self::back), and fills the back half of
+/// the remaining half. That gives 24 orientations: a stair on the floor
+/// (`floor: NegY`), one hung from the ceiling (`floor: PosY`), and the
+/// wall-mounted ones in between.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StairInfo {
+    /// The face the full half is flush with.
+    pub floor: AlignedFace,
+    /// The face the step is flush with. Must not share an axis with
+    /// [`floor`](Self::floor); the mesher debug-asserts it doesn't.
+    pub back: AlignedFace,
+}
+
+impl StairInfo {
+    /// The face the step rises from — opposite [`back`](Self::back), the
+    /// one that shows a tread and a riser.
+    #[inline]
+    pub fn front(&self) -> AlignedFace {
+        self.back.opposite()
+    }
+
+    /// The axis neither `floor` nor `back` lies on — the one the stair runs
+    /// along. The two faces on it show the stair's L-shaped profile.
+    #[inline]
+    pub fn side_axis(&self) -> Axis {
+        match (self.floor.axis(), self.back.axis()) {
+            (Axis::X, Axis::Y) | (Axis::Y, Axis::X) => Axis::Z,
+            (Axis::X, Axis::Z) | (Axis::Z, Axis::X) => Axis::Y,
+            _ => Axis::X,
+        }
+    }
+}
+
 /// The geometric shape of a block, controlling quad generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shape {
@@ -100,6 +138,8 @@ pub enum Shape {
     WholeBlock,
     /// Partial-height slab flush with one face.
     Slab(SlabInfo),
+    /// A half slab with a quarter step on it, in any of 24 orientations.
+    Stair(StairInfo),
     /// X-shaped diagonal billboard (e.g. sugar cane, cobwebs).
     Cross(CrossInfo),
     /// Flat quad offset inward from one face, rendered double-sided
@@ -136,6 +176,27 @@ pub trait Block: Copy + PartialEq + Debug {
     const FLUID_ENABLED: bool = false;
 
     fn shape(&self) -> Shape;
+
+    /// The fluid standing in this cell, if any — the column the surface
+    /// height field is built from.
+    ///
+    /// For a block whose [`shape`](Self::shape) is [`Shape::Fluid`] this is
+    /// that fluid, and the default answers so. Override it to put a fluid
+    /// *and* a solid in one cell — a waterlogged slab, stair or ladder —
+    /// by returning `Some` from a block whose shape is something else. The
+    /// mesher then emits the solid's quads as usual and the fluid's into
+    /// [`Quads::fluid`](crate::Quads::fluid), culled against the solid's
+    /// own faces and stitched to neighboring fluid of the same
+    /// [`id`](FluidInfo::id) exactly as a plain fluid cell would be.
+    ///
+    /// Requires [`FLUID_ENABLED`](Self::FLUID_ENABLED), like the shape.
+    #[inline]
+    fn fluid(&self) -> Option<FluidInfo> {
+        match self.shape() {
+            Shape::Fluid(info) => Some(info),
+            _ => None,
+        }
+    }
 
     fn cull_mode(&self) -> CullMode<Self::TransparentGroup>;
 

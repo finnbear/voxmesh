@@ -9,7 +9,8 @@ mod light;
 mod mesh;
 
 pub use block::{
-    Block, CrossInfo, CullMode, FacadeInfo, FluidInfo, Shape, SlabInfo, Thickness, FULL_THICKNESS,
+    Block, CrossInfo, CullMode, FacadeInfo, FluidInfo, Shape, SlabInfo, StairInfo, Thickness,
+    FULL_THICKNESS,
 };
 pub use chunk::{
     ChunkShape, ChunkShape16, ChunkShape2, ChunkShape4, ChunkShape8, PaddedChunk, PaddedChunk16,
