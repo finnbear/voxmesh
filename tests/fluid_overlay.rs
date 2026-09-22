@@ -11,6 +11,7 @@ use voxmesh::*;
 
 const HEIGHTS: [Thickness; 4] = [16, 12, 8, 4];
 const WATER: u8 = 0;
+const LADDER: u8 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum B {
@@ -23,6 +24,15 @@ enum B {
     WetLowerSlab,
     /// A floor stair rising toward -Z, with water standing in its cell.
     WetStair,
+    /// A ladder hung on the -Z wall, with water standing in its cell.
+    ///
+    /// The only waterlogged block here that is **transparent** — its
+    /// texture has holes in it, so it merges as its own group rather than
+    /// reading as opaque. That is the whole reason it exists: an opaque
+    /// solid in a wet cell hides a face by sealing it, and every question
+    /// about culling water against a wet neighbor was being answered by
+    /// the seal rather than by the water.
+    WetLadder,
 }
 
 impl Block for B {
@@ -45,6 +55,10 @@ impl Block for B {
                 floor: AlignedFace::NegY,
                 back: AlignedFace::NegZ,
             }),
+            B::WetLadder => Shape::Facade(FacadeInfo {
+                face: AlignedFace::NegZ,
+                offset: 1,
+            }),
             _ => Shape::WholeBlock,
         }
     }
@@ -56,7 +70,7 @@ impl Block for B {
                 _ => unreachable!(),
             },
             // Binary: a waterlogged cell is a source.
-            B::WetLowerSlab | B::WetStair => Some(FluidInfo {
+            B::WetLowerSlab | B::WetStair | B::WetLadder => Some(FluidInfo {
                 face: AlignedFace::PosY,
                 height: FULL_THICKNESS,
                 id: WATER,
@@ -69,6 +83,7 @@ impl Block for B {
         match self {
             B::Air => CullMode::Empty,
             B::Water(_) => CullMode::TransparentMerged(WATER),
+            B::WetLadder => CullMode::TransparentMerged(LADDER),
             _ => CullMode::Opaque,
         }
     }
@@ -88,6 +103,19 @@ fn solid_total(q: &Quads) -> usize {
 
 fn fluid_total(q: &Quads) -> usize {
     q.fluid.iter().map(|v| v.len()).sum()
+}
+
+/// The solid quads belonging to the cell at `at`, across every face.
+fn solid_quads_at(q: &Quads, at: UVec3) -> usize {
+    AlignedFace::ALL
+        .into_iter()
+        .map(|face| {
+            q.faces[face.index()]
+                .iter()
+                .filter(|quad| quad.voxel_position(face) == at)
+                .count()
+        })
+        .sum()
 }
 
 #[test]
@@ -148,6 +176,88 @@ fn water_beside_a_wet_slab_joins_it() {
         .filter(|quad| quad.voxel_position(AlignedFace::NegX) == UVec3::new(1, 0, 0))
         .count();
     assert_eq!(water_negx, 0, "the water's face against the wet cell");
+}
+
+/// The transparent twin of [`water_beside_a_wet_slab_joins_it`], and the
+/// regression this pair exists to hold down.
+///
+/// A slab's stone is opaque, so the pond beside it was culled by the
+/// "an opaque neighbor seals the face" rule and the real question was never
+/// put. A ladder's is not. The pond's own quads go to
+/// `is_culled_at_boundary`, which ends by asking whether the two *blocks*
+/// merge — `TransparentMerged(WATER)` against `TransparentMerged(LADDER)`,
+/// which they do not — so a pane of water was drawn down the middle of one
+/// body of water, visible in game as a surface hanging beside every
+/// waterlogged ladder.
+#[test]
+fn water_beside_a_wet_ladder_joins_it() {
+    let q = mesh(&[(0, 0, 0, B::WetLadder), (1, 0, 0, B::Water(0))]);
+    // Neither side draws the shared face. The wet cell's overlay...
+    assert_eq!(
+        q.fluid[AlignedFace::PosX.index()].len(),
+        0,
+        "the wet cell's water, facing the pond"
+    );
+    // ...nor the pond's own quad, which is the half that was wrong.
+    let water_negx = q.faces[AlignedFace::NegX.index()]
+        .iter()
+        .filter(|quad| quad.voxel_position(AlignedFace::NegX) == UVec3::new(1, 0, 0))
+        .count();
+    assert_eq!(water_negx, 0, "the pond's face against the wet cell");
+    // And the ladder still hangs there. Culling water against water must
+    // not reach the block sharing the cell: water seals nothing of a
+    // facade, so the rungs show through it exactly as they do in air.
+    let alone = mesh(&[(0, 0, 0, B::WetLadder)]);
+    assert_eq!(
+        solid_quads_at(&q, UVec3::ZERO),
+        solid_quads_at(&alone, UVec3::ZERO),
+        "the ladder's own quads, with water beside it and without"
+    );
+}
+
+/// A wet ladder's surface is shaded as water, not as the ladder.
+///
+/// The other half of one pond reading as two. With the faces between them
+/// culled, what was left was the *shade*: the overlay was lit through the
+/// `Facade` branch — the ladder's own cell, against the ladder's occluders —
+/// so the wall it hangs on darkened the water above it, and the surface came
+/// out a rectangle of slightly wrong blue outlined against the pond next door.
+///
+/// A ladder hangs on a wall, and a wall is exactly the occluder that makes the
+/// two disagree, so the wall is what this builds. It sits *under* the
+/// waterline, where it has no business shading anything on top of it.
+#[test]
+fn a_wet_ladders_surface_is_shaded_like_the_water_beside_it() {
+    let q = mesh(&[
+        // The wall, the ladder on its +Z face, and open water alongside.
+        (1, 0, 0, B::Stone),
+        (1, 0, 1, B::WetLadder),
+        (1, 0, 2, B::Water(0)),
+    ]);
+    let wet = &q.fluid[AlignedFace::PosY.index()];
+    assert_eq!(wet.len(), 1, "the wet cell's surface");
+    let pond = q.faces[AlignedFace::PosY.index()]
+        .iter()
+        .find(|quad| quad.voxel_position(AlignedFace::PosY) == UVec3::new(1, 0, 2))
+        .expect("the pond's surface");
+    assert_eq!(
+        wet[0].ao, pond.ao,
+        "the wet cell's surface is shaded differently from the water it is part of"
+    );
+}
+
+/// Two waterlogged ladders are one body of water, not two.
+///
+/// The same rule where *both* sides of the shared face are overlays, which
+/// the overlay arm already handled — so this is the guard that hoisting the
+/// same-fluid test out of that arm left it doing its old job.
+#[test]
+fn two_wet_ladders_join_their_water() {
+    let q = mesh(&[(0, 0, 0, B::WetLadder), (1, 0, 0, B::WetLadder)]);
+    assert_eq!(q.fluid[AlignedFace::PosX.index()].len(), 0);
+    assert_eq!(q.fluid[AlignedFace::NegX.index()].len(), 0);
+    // Merged into one surface over the pair, as two wet slabs are.
+    assert_eq!(q.fluid[AlignedFace::PosY.index()].len(), 1);
 }
 
 #[test]

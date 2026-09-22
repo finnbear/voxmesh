@@ -1129,10 +1129,24 @@ unsafe fn compute_fluid_mask_entry<B: Block>(
         Rect16::FULL
     };
     let culled = |face: AlignedFace| {
+        // The same fluid next door joins this one whatever else is sharing
+        // its cell, so there is never a surface between the two — and that
+        // holds for a plain fluid cell just as much as for an overlay.
+        //
+        // Hoisted out of the `overlay` arm for exactly that reason. The
+        // pond's own quads went to `is_culled_at_boundary`, which ends by
+        // asking the two *blocks* whether they merge, and water against a
+        // waterlogged ladder answers `TransparentMerged(Water)` against
+        // `TransparentMerged(Ladder)` — no match, so it drew a pane of water
+        // between two cells of one pond. A waterlogged *slab* hid the bug for
+        // as long as it lasted, its stone being opaque and culling on the
+        // arm above.
+        if neighbor.fluid().is_some_and(|n| n.id == info.id) {
+            return true;
+        }
         if overlay {
-            neighbor.fluid().is_some_and(|n| n.id == info.id)
-                || (matches!(neighbor.cull_mode(), CullMode::Opaque)
-                    && footprint_covers(&boundary_footprint(neighbor, face.opposite()), &open))
+            matches!(neighbor.cull_mode(), CullMode::Opaque)
+                && footprint_covers(&boundary_footprint(neighbor, face.opposite()), &open)
         } else {
             is_culled_at_boundary(block, neighbor, face, &Rect16::FULL)
         }
@@ -1815,7 +1829,7 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
 
                     // Compute AO and smooth light for visible faces.
                     if B::Light::AO_ENABLED || B::Light::LIGHT_ENABLED {
-                        let light_entry = |e: &mut MaskEntry<B>| {
+                        let light_entry = |e: &mut MaskEntry<B>, overlay: bool| {
                             // Faces inset into the block sample AO/light
                             // at the block's own plane rather than the
                             // neighbor's, and check the inset direction
@@ -1823,8 +1837,20 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
                             // since neighbors at the same level don't
                             // protrude past the surface. A slab's inner
                             // face, a stair's tread and riser.
+                            //
+                            // The fluid standing in a solid's cell is none of
+                            // that solid's geometry and must not be lit as if
+                            // it were. A waterlogged ladder is a `Facade`, so
+                            // without the `overlay` test its water was sampled
+                            // at the ladder's own cell against the ladder's
+                            // occluders, and the surface came out a different
+                            // shade from the pond it is part of — a rectangle
+                            // of slightly wrong blue, outlined against the
+                            // water next door. Left to `inset`, it lights
+                            // exactly as a plain fluid cell of the same height
+                            // does, which is what it is.
                             let inset = e.normal_pos != whole_normal_pos;
-                            let (sample_idx, ao_face) = if is_facade {
+                            let (sample_idx, ao_face) = if is_facade && !overlay {
                                 (idx, face.opposite())
                             } else if inset {
                                 (idx, face)
@@ -1842,13 +1868,13 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
                             e.light = light;
                         };
                         if let Some(ref mut e) = entry {
-                            light_entry(e);
+                            light_entry(e, false);
                         }
                         if let Some(ref mut e) = second {
-                            light_entry(e);
+                            light_entry(e, false);
                         }
                         if let Some(ref mut e) = fluid_entry {
-                            light_entry(e);
+                            light_entry(e, true);
                         }
                     }
 
