@@ -25,9 +25,14 @@ pub struct Quad<L: Light = ()> {
     pub corner_offsets: [i8; 4],
     /// Per-vertex ambient occlusion (0=fully occluded, 3=fully lit).
     /// Vertex order matches [`positions`](Self::positions).
+    ///
+    /// Read at this quad's own corners, which for geometry that does not
+    /// fill its cell are not the cell's: a stair's tread takes the value
+    /// the field has halfway across the cell, not the one at the edge.
     pub ao: [u8; 4],
     /// Per-vertex averaged light values.
-    /// Vertex order matches [`positions`](Self::positions).
+    /// Vertex order matches [`positions`](Self::positions), and they are
+    /// read where the vertices are, as [`ao`](Self::ao) is.
     pub light: [L::Average; 4],
 }
 
@@ -346,9 +351,13 @@ struct MaskEntry<B: Block> {
     /// entry's identity, so greedy merging never spans a slope — see
     /// the note on the emit phase in [`mesh_chunk_into`].
     corner_offsets: [i8; 4],
-    /// Per-vertex AO in mask-local order: [umin/vmin, umax/vmin, umax/vmax, umin/vmax].
+    /// Per-vertex AO in mask-local order: [umin/vmin, umax/vmin,
+    /// umax/vmax, umin/vmax] — of the entry's own rectangle, not of the
+    /// cell, so two entries that cover different parts of one cell carry
+    /// different values and merging stays honest. See
+    /// [`resample_to_rect`].
     ao: [u8; 4],
-    /// Per-vertex light in mask-local order.
+    /// Per-vertex light in mask-local order, read where [`Self::ao`] is.
     light: [<<B as Block>::Light as Light>::Average; 4],
 }
 
@@ -1314,6 +1323,71 @@ fn compute_ao_light<B: Block>(
     (ao, light)
 }
 
+/// Moves per-vertex AO and light, computed at a cell face's four corners,
+/// onto the corners of a rectangle inside that face.
+///
+/// Both are samples of a field defined at the corners of cells. Geometry
+/// that does not fill its cell — a stair's tread and riser, the L its side
+/// shows, the strip on a slab's — has vertices part-way across the face,
+/// and those take the field's value where they actually stand, which is
+/// the bilinear blend of the four corners.
+///
+/// Without this a stair took the whole cell's gradient and stretched it
+/// over each of its halves, so a neighbor's darkening arrived at the middle
+/// of the step rather than at the edge it touches, twice as steep as it
+/// should be and showing plainly the moment anything stood near enough to
+/// cast AO at all.
+///
+/// A rectangle that *is* the whole face is returned untouched, which is the
+/// common case and keeps whole blocks exactly as they were.
+#[inline]
+fn resample_to_rect<B: Block>(
+    ao: [u8; 4],
+    light: [<B::Light as Light>::Average; 4],
+    rect: &Rect16,
+) -> ([u8; 4], [<B::Light as Light>::Average; 4]) {
+    if rect.is_full() {
+        return (ao, light);
+    }
+    let ft = FULL_THICKNESS as f32;
+    // Bilinear weights at one corner of the rectangle, in the same
+    // mask-local order the four samples are in.
+    let weights = |u: u8, v: u8| {
+        let (tu, tv) = (u as f32 / ft, v as f32 / ft);
+        [
+            (1.0 - tu) * (1.0 - tv),
+            tu * (1.0 - tv),
+            tu * tv,
+            (1.0 - tu) * tv,
+        ]
+    };
+    let corners = [
+        weights(rect.u0, rect.v0),
+        weights(rect.u1, rect.v0),
+        weights(rect.u1, rect.v1),
+        weights(rect.u0, rect.v1),
+    ];
+    let out_ao = if B::Light::AO_ENABLED {
+        corners.map(|w| {
+            let blended = ao[0] as f32 * w[0]
+                + ao[1] as f32 * w[1]
+                + ao[2] as f32 * w[2]
+                + ao[3] as f32 * w[3];
+            // AO is four levels and a vertex gets one of them, so the
+            // blend has to land back on the ladder it came off.
+            blended.round().clamp(0.0, 3.0) as u8
+        })
+    } else {
+        ao
+    };
+    let out_light = if B::Light::LIGHT_ENABLED {
+        corners.map(|w| B::Light::blend(&light, w))
+    } else {
+        light
+    };
+    (out_ao, out_light)
+}
+
 impl<L: Light> Quads<L> {
     /// Creates an empty `Quads` with no allocations.
     pub fn new() -> Self {
@@ -1864,6 +1938,9 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
                                 v_stride as isize,
                                 ao_face,
                             );
+                            // Sampled at the cell's corners; this quad may
+                            // only cover part of the cell.
+                            let (ao, light) = resample_to_rect::<B>(ao, light, &entry_rect(e));
                             e.ao = ao;
                             e.light = light;
                         };

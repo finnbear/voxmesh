@@ -324,3 +324,78 @@ fn a_stair_occludes_ambient_light_only_where_it_is_full() {
     // And a full block darkens as it always did.
     assert!(stone_top_ao(B::Stone).iter().any(|&ao| ao < 3));
 }
+
+/// The AO of every quad on `face` of the stair at (2, 1, 2), keyed by the
+/// quad's own extent so the two a stair shows can be told apart.
+fn stair_face_ao(blocks: &[(u32, u32, u32, TestBlock)], face: AlignedFace) -> Vec<(Vec3, [u8; 4])> {
+    let q = mesh_with(blocks);
+    q.faces[face.index()]
+        .iter()
+        .filter(|quad| quad.voxel_position(face) == glam::UVec3::new(2, 1, 2))
+        .map(|quad| {
+            (
+                extent(&quad.positions(face, TestBlock::Stair.shape())).0,
+                quad.ao,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_treads_ao_is_read_where_the_tread_is() {
+    // Stone against the stair's back and both its sides. The top of the
+    // cell is dark along the back edge and lit along the front, and the
+    // tread is only the front half of it: its inner edge stands halfway
+    // across that gradient, not at the dark end of it.
+    //
+    // Handing the tread the cell's own corner values put the full
+    // darkening of the stone behind the step onto the tread's inner edge,
+    // a cell away from it — a dark band down the middle of every stair
+    // with anything standing near it.
+    let ao = stair_face_ao(
+        &[
+            (2, 1, 2, TestBlock::Stair),
+            (2, 1, 1, TestBlock::Stone),
+            (1, 1, 2, TestBlock::Stone),
+            (3, 1, 2, TestBlock::Stone),
+        ],
+        AlignedFace::PosY,
+    );
+    // The tread is the half at half height; the step's top is at the top.
+    let tread = ao
+        .iter()
+        .find(|(min, _)| (min.y - 1.5).abs() < 1e-6)
+        .expect("the tread");
+    let step = ao
+        .iter()
+        .find(|(min, _)| (min.y - 2.0).abs() < 1e-6)
+        .expect("the step's top");
+    // The cell's corners are [0, 2, 2, 0]; halfway along u they are 1.
+    assert_eq!(tread.1, [1, 2, 2, 1], "the tread took the cell's corners");
+    // The step's top looks at the plane above, which nothing reaches.
+    assert_eq!(step.1, [3; 4], "the step's top darkened out of nowhere");
+}
+
+#[test]
+fn a_steps_ao_is_read_where_the_step_is() {
+    // The worst case, because it is offset both ways: the quarter a stair
+    // shows on its side, which covers the far half of the upper half. A
+    // stone under the neighboring cell darkens the bottom of that side —
+    // the slab's strip, which touches it — and must not reach the step
+    // standing a half cell above and a half cell back from it.
+    let ao = stair_face_ao(
+        &[(2, 1, 2, TestBlock::Stair), (1, 0, 2, TestBlock::Stone)],
+        AlignedFace::NegX,
+    );
+    let slab = ao
+        .iter()
+        .find(|(min, _)| (min.y - 1.0).abs() < 1e-6)
+        .expect("the slab's strip");
+    let step = ao
+        .iter()
+        .find(|(min, _)| (min.y - 1.5).abs() < 1e-6)
+        .expect("the step's quarter");
+    // The strip stands on the darkened edge, so it keeps it.
+    assert_eq!(slab.1, [2, 2, 3, 3], "the strip lost the stone below it");
+    assert_eq!(step.1, [3; 4], "the step took the strip's darkening");
+}
