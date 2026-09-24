@@ -1,7 +1,8 @@
 //! A fluid standing in a solid's cell: [`Block::fluid`] answering `Some`
 //! for a block whose shape is a slab or a stair. The solid meshes as it
 //! always did; the fluid meshes into [`Quads::fluid`], hidden by the
-//! solid's own full faces and joined to the water next door.
+//! solid's own full faces (except an inset block's top and bottom, which
+//! never hide it) and joined to the water next door.
 
 #![feature(generic_const_exprs)]
 #![allow(incomplete_features)]
@@ -22,8 +23,13 @@ enum B {
     LowerSlab,
     /// A lower slab with water standing in its cell.
     WetLowerSlab,
+    /// An upper slab with water standing in its cell.
+    WetUpperSlab,
     /// A floor stair rising toward -Z, with water standing in its cell.
     WetStair,
+    /// A bamboo-like inset block, with water standing in its cell. Its top
+    /// face is flush and full, so it seals the whole surface plane.
+    WetInset,
     /// A ladder hung on the -Z wall, with water standing in its cell.
     ///
     /// The only waterlogged block here that is **transparent** — its
@@ -51,10 +57,15 @@ impl Block for B {
                 face: AlignedFace::NegY,
                 thickness: 8,
             }),
+            B::WetUpperSlab => Shape::Slab(SlabInfo {
+                face: AlignedFace::PosY,
+                thickness: 8,
+            }),
             B::WetStair => Shape::Stair(StairInfo {
                 floor: AlignedFace::NegY,
                 back: AlignedFace::NegZ,
             }),
+            B::WetInset => Shape::Inset(4),
             B::WetLadder => Shape::Facade(FacadeInfo {
                 face: AlignedFace::NegZ,
                 offset: 1,
@@ -70,11 +81,13 @@ impl Block for B {
                 _ => unreachable!(),
             },
             // Binary: a waterlogged cell is a source.
-            B::WetLowerSlab | B::WetStair | B::WetLadder => Some(FluidInfo {
-                face: AlignedFace::PosY,
-                height: FULL_THICKNESS,
-                id: WATER,
-            }),
+            B::WetLowerSlab | B::WetUpperSlab | B::WetStair | B::WetInset | B::WetLadder => {
+                Some(FluidInfo {
+                    face: AlignedFace::PosY,
+                    height: FULL_THICKNESS,
+                    id: WATER,
+                })
+            }
             _ => None,
         }
     }
@@ -374,6 +387,59 @@ fn the_water_in_a_stair_is_clipped_around_the_step() {
         (lo.y - 0.5).abs() < 1e-6 && (hi.y - 1.0).abs() < 1e-6,
         "{lo:?} {hi:?}"
     );
+}
+
+/// The top and bottom of the water in an inset block are never clipped.
+///
+/// An inset block's top and bottom faces are flush and full, so clipping the
+/// water to what the block leaves open left nothing: a waterlogged bamboo
+/// stood in a dry square hole in the pond's surface.
+#[test]
+fn the_water_in_an_inset_block_keeps_its_whole_surface() {
+    let q = mesh(&[(0, 0, 0, B::WetInset)]);
+    let shape = Shape::Fluid(B::WetInset.fluid().unwrap());
+    let top = &q.fluid[AlignedFace::PosY.index()];
+    assert_eq!(top.len(), 1, "the wet cell's surface");
+    let (lo, hi) = extent(&top[0], AlignedFace::PosY, shape);
+    assert!(
+        lo.x.abs() < 1e-6
+            && lo.z.abs() < 1e-6
+            && (hi.x - 1.0).abs() < 1e-6
+            && (hi.z - 1.0).abs() < 1e-6,
+        "{lo:?} {hi:?}"
+    );
+    assert!(
+        (lo.y - 1.0).abs() < 1e-6 && (hi.y - 1.0).abs() < 1e-6,
+        "{lo:?} {hi:?}"
+    );
+    // The underside too, over open air, the whole cell on the floor.
+    let bottom = &q.fluid[AlignedFace::NegY.index()];
+    assert_eq!(bottom.len(), 1, "the wet cell's underside");
+    let (lo, hi) = extent(&bottom[0], AlignedFace::NegY, shape);
+    assert!(
+        lo.x.abs() < 1e-6
+            && lo.z.abs() < 1e-6
+            && (hi.x - 1.0).abs() < 1e-6
+            && (hi.z - 1.0).abs() < 1e-6,
+        "{lo:?} {hi:?}"
+    );
+    assert!(lo.y.abs() < 1e-6 && hi.y.abs() < 1e-6, "{lo:?} {hi:?}");
+    // Still hidden by what is above and below it.
+    let covered = mesh(&[
+        (0, 0, 0, B::Stone),
+        (0, 1, 0, B::WetInset),
+        (0, 2, 0, B::Stone),
+    ]);
+    assert_eq!(covered.fluid[AlignedFace::PosY.index()].len(), 0);
+    assert_eq!(covered.fluid[AlignedFace::NegY.index()].len(), 0);
+}
+
+/// Unlike an inset block's, an upper slab's top really is solid all the
+/// way across, so the water standing under it has no surface to show.
+#[test]
+fn a_wet_upper_slab_shows_no_surface() {
+    let q = mesh(&[(0, 0, 0, B::WetUpperSlab)]);
+    assert_eq!(q.fluid[AlignedFace::PosY.index()].len(), 0);
 }
 
 #[test]

@@ -1132,7 +1132,15 @@ unsafe fn compute_fluid_mask_entry<B: Block>(
     // strip above a slab, the quadrant beside a stair's step. Clipped
     // rather than drawn whole and hidden by depth, so the water never
     // shares a plane with the solid's own quad.
-    let open = if overlay {
+    //
+    // Except the top and bottom of the water in an inset block, which are
+    // drawn whole. The block claims both of those faces, but its column is
+    // inset (bamboo), so the water surrounds it there as well: clipping
+    // left a dry square in the middle of the pond. The consumer does not
+    // z-fight water against solids, so sharing the block's plane costs
+    // nothing.
+    let inset_cap = face.axis() == Axis::Y && matches!(block.shape(), Shape::Inset(_));
+    let open = if overlay && !inset_cap {
         uncovered(&boundary_footprint(block, face))?
     } else {
         Rect16::FULL
