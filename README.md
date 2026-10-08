@@ -7,6 +7,7 @@ Voxel greedy meshing library.
   - Whole blocks (e.g. grass)
   - Arbitrary thickness/direction slabs
   - Arbitrary stairs
+  - Arbitrary ramps (a wedge with a stretched-texture slope)
   - Arbitrarily inset blocks (e.g. cactus, bamboo)
   - Fluids with a shared surface height field (e.g. flowing water)
   - Fluid-logged blocks

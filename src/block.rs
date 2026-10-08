@@ -131,6 +131,57 @@ impl StairInfo {
     }
 }
 
+/// Configuration for a ramp: a wedge whose slope rises from the floor at
+/// the front of the cell to the far side at the back.
+///
+/// Fixed by the same two perpendicular faces as a [`StairInfo`], so it has
+/// the same 24 orientations. The wedge seals [`floor`](Self::floor) and
+/// [`back`](Self::back), shows a right triangle on each side, and has no
+/// front or top of its own — the slope stands in for both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RampInfo {
+    /// The face the wedge stands on.
+    pub floor: AlignedFace,
+    /// The face the slope rises toward, which the wedge fills. Must not
+    /// share an axis with [`floor`](Self::floor); the mesher debug-asserts
+    /// it doesn't.
+    pub back: AlignedFace,
+}
+
+impl RampInfo {
+    /// The face the slope descends toward — opposite [`back`](Self::back).
+    #[inline]
+    pub fn front(&self) -> AlignedFace {
+        self.back.opposite()
+    }
+
+    /// The face the slope's quad is listed under: opposite
+    /// [`floor`](Self::floor), with its front edge lowered to the floor.
+    #[inline]
+    pub fn slope_face(&self) -> AlignedFace {
+        self.floor.opposite()
+    }
+
+    /// The axis neither `floor` nor `back` lies on — the one the ramp runs
+    /// across. The two faces on it show the wedge's triangular profile.
+    #[inline]
+    pub fn side_axis(&self) -> Axis {
+        StairInfo {
+            floor: self.floor,
+            back: self.back,
+        }
+        .side_axis()
+    }
+
+    /// The slope's unit outward normal: away from the wedge, halfway
+    /// between [`slope_face`](Self::slope_face) and [`front`](Self::front).
+    #[inline]
+    pub fn slope_normal(&self) -> glam::Vec3 {
+        (self.slope_face().normal() + self.front().normal()).as_vec3()
+            * std::f32::consts::FRAC_1_SQRT_2
+    }
+}
+
 /// The geometric shape of a block, controlling quad generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shape {
@@ -140,6 +191,11 @@ pub enum Shape {
     Slab(SlabInfo),
     /// A half slab with a quarter step on it, in any of 24 orientations.
     Stair(StairInfo),
+    /// A wedge with one sloped face, in any of 24 orientations. The slope
+    /// is listed under [`RampInfo::slope_face`] and the sides are
+    /// triangles, both bent into shape by
+    /// [`Quad::corner_offsets`](crate::Quad::corner_offsets).
+    Ramp(RampInfo),
     /// X-shaped diagonal billboard (e.g. sugar cane, cobwebs).
     Cross(CrossInfo),
     /// Flat quad offset inward from one face, rendered double-sided

@@ -25,6 +25,10 @@ pub enum TestBlock {
     Stair,     // Stair(floor NegY, back NegZ): on the floor, rising toward -Z
     Corbel,    // Stair(floor PosY, back NegZ): the same stair hung from the ceiling
     WallStair, // Stair(floor PosX, back NegY): on the +X wall, stepping down
+    Ramp,      // Ramp(floor NegY, back NegZ): on the floor, rising toward -Z
+    HungRamp,  // Ramp(floor PosY, back NegZ): the same ramp hung from the ceiling
+    WallRamp,  // Ramp(floor PosX, back NegY): on the +X wall, sloping down
+    SideRamp,  // Ramp(floor NegY, back PosX): on the floor, rising toward +X
 }
 
 impl Block for TestBlock {
@@ -92,6 +96,22 @@ impl Block for TestBlock {
             TestBlock::WallStair => Shape::Stair(StairInfo {
                 floor: AlignedFace::PosX,
                 back: AlignedFace::NegY,
+            }),
+            TestBlock::Ramp => Shape::Ramp(RampInfo {
+                floor: AlignedFace::NegY,
+                back: AlignedFace::NegZ,
+            }),
+            TestBlock::HungRamp => Shape::Ramp(RampInfo {
+                floor: AlignedFace::PosY,
+                back: AlignedFace::NegZ,
+            }),
+            TestBlock::WallRamp => Shape::Ramp(RampInfo {
+                floor: AlignedFace::PosX,
+                back: AlignedFace::NegY,
+            }),
+            TestBlock::SideRamp => Shape::Ramp(RampInfo {
+                floor: AlignedFace::NegY,
+                back: AlignedFace::PosX,
             }),
             _ => Shape::WholeBlock,
         }

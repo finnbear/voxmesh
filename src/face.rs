@@ -130,11 +130,16 @@ impl Face {
     /// the crossing plane). The sign is arbitrary since diagonal quads are
     /// two-sided.
     ///
-    /// `shape` is only used for diagonal faces and ignored otherwise.
+    /// `shape` is used for diagonal faces, and for a [`Shape::Ramp`]'s
+    /// slope, which is listed under an aligned face but tilts away from it.
+    /// It is ignored otherwise.
     #[inline]
     pub fn normal(self, shape: Shape) -> Vec3 {
         match self {
-            Face::Aligned(f) => f.normal().as_vec3(),
+            Face::Aligned(f) => match shape {
+                Shape::Ramp(info) if f == info.slope_face() => info.slope_normal(),
+                _ => f.normal().as_vec3(),
+            },
             Face::Diagonal(d) => {
                 let info = match shape {
                     Shape::Cross(info) => info,

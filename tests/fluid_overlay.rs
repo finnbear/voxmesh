@@ -27,6 +27,8 @@ enum B {
     WetUpperSlab,
     /// A floor stair rising toward -Z, with water standing in its cell.
     WetStair,
+    /// A floor ramp rising toward -Z, with water standing in its cell.
+    WetRamp,
     /// A bamboo-like inset block, with water standing in its cell. Its top
     /// face is flush and full, so it seals the whole surface plane.
     WetInset,
@@ -65,6 +67,10 @@ impl Block for B {
                 floor: AlignedFace::NegY,
                 back: AlignedFace::NegZ,
             }),
+            B::WetRamp => Shape::Ramp(RampInfo {
+                floor: AlignedFace::NegY,
+                back: AlignedFace::NegZ,
+            }),
             B::WetInset => Shape::Inset(4),
             B::WetLadder => Shape::Facade(FacadeInfo {
                 face: AlignedFace::NegZ,
@@ -81,13 +87,16 @@ impl Block for B {
                 _ => unreachable!(),
             },
             // Binary: a waterlogged cell is a source.
-            B::WetLowerSlab | B::WetUpperSlab | B::WetStair | B::WetInset | B::WetLadder => {
-                Some(FluidInfo {
-                    face: AlignedFace::PosY,
-                    height: FULL_THICKNESS,
-                    id: WATER,
-                })
-            }
+            B::WetLowerSlab
+            | B::WetUpperSlab
+            | B::WetStair
+            | B::WetRamp
+            | B::WetInset
+            | B::WetLadder => Some(FluidInfo {
+                face: AlignedFace::PosY,
+                height: FULL_THICKNESS,
+                id: WATER,
+            }),
             _ => None,
         }
     }
@@ -173,6 +182,36 @@ fn a_wet_stair_hides_its_water_behind_its_floor_and_back() {
     assert_eq!(fluid_total(&q), 4);
     assert_eq!(q.fluid[AlignedFace::NegY.index()].len(), 0);
     assert_eq!(q.fluid[AlignedFace::NegZ.index()].len(), 0);
+}
+
+/// A ramp seals its floor and its back like a stair, and nothing else: the
+/// water above the slope shows whole on the surface, the front and both
+/// sides, since a triangle leaves no rectangle open to clip to.
+#[test]
+fn a_wet_ramp_hides_its_water_behind_its_floor_and_back() {
+    let q = mesh(&[(0, 0, 0, B::WetRamp)]);
+    assert_eq!(solid_total(&q), 5);
+    assert_eq!(fluid_total(&q), 4);
+    assert_eq!(q.fluid[AlignedFace::NegY.index()].len(), 0);
+    assert_eq!(q.fluid[AlignedFace::NegZ.index()].len(), 0);
+    for face in [
+        AlignedFace::PosY,
+        AlignedFace::PosZ,
+        AlignedFace::PosX,
+        AlignedFace::NegX,
+    ] {
+        let quads = &q.fluid[face.index()];
+        assert_eq!(quads.len(), 1, "{face:?}");
+        assert_eq!(quads[0].size, glam::UVec2::new(16, 16), "{face:?}");
+    }
+    // A pond beside the ramp joins its water and shows the ramp's stone.
+    let q = mesh(&[(0, 0, 0, B::WetRamp), (1, 0, 0, B::Water(0))]);
+    assert_eq!(q.fluid[AlignedFace::PosX.index()].len(), 0);
+    let side = q.faces[AlignedFace::PosX.index()]
+        .iter()
+        .filter(|quad| quad.voxel_position(AlignedFace::PosX) == UVec3::ZERO)
+        .count();
+    assert_eq!(side, 1, "the ramp's side shows through the water");
 }
 
 #[test]

@@ -1,7 +1,7 @@
 use glam::{UVec2, UVec3, Vec2, Vec3};
 
 use crate::block::{
-    Block, CrossInfo, CullMode, FluidInfo, Shape, StairInfo, Thickness, FULL_THICKNESS,
+    Block, CrossInfo, CullMode, FluidInfo, RampInfo, Shape, StairInfo, Thickness, FULL_THICKNESS,
 };
 use crate::chunk::{ChunkShape, PaddedChunk, PADDING};
 use crate::face::{AlignedFace, Axis, DiagonalFace, Face};
@@ -15,13 +15,15 @@ pub struct Quad<L: Light = ()> {
     pub origin_padded: UVec3,
     /// Size of the quad in 1/16ths of a block.
     pub size: UVec2,
-    /// Per-vertex displacement along the fluid axis in 1/16ths, applied
-    /// by [`positions`](Self::positions) when the quad's shape is
-    /// [`Shape::Fluid`]. Vertex order matches
+    /// Per-vertex displacement in 1/16ths, applied by
+    /// [`positions`](Self::positions) when the quad's shape is
+    /// [`Shape::Fluid`] — along the fluid axis — or [`Shape::Ramp`] — along
+    /// the floor's axis, which is what tilts the slope and folds each side
+    /// into a triangle. Vertex order matches
     /// [`positions`](Self::positions).
     ///
-    /// Always `[0; 4]` for every other shape, and for every quad at all
-    /// unless [`Block::FLUID_ENABLED`](crate::Block::FLUID_ENABLED).
+    /// Always `[0; 4]` for every other shape, and for fluid quads unless
+    /// [`Block::FLUID_ENABLED`](crate::Block::FLUID_ENABLED).
     pub corner_offsets: [i8; 4],
     /// Per-vertex ambient occlusion (0=fully occluded, 3=fully lit).
     /// Vertex order matches [`positions`](Self::positions).
@@ -44,6 +46,17 @@ fn face_tangents(face: AlignedFace) -> (Vec3, Vec3) {
         AlignedFace::PosX | AlignedFace::NegX => (Vec3::Z, Vec3::Y),
         AlignedFace::PosY | AlignedFace::NegY => (Vec3::Z, Vec3::X),
         AlignedFace::PosZ | AlignedFace::NegZ => (Vec3::X, Vec3::Y),
+    }
+}
+
+/// The axis [`Quad::corner_offsets`] displace vertices along, for the shapes
+/// that use them: a fluid's depth axis, a ramp's floor axis.
+#[inline]
+fn corner_offset_axis(shape: Shape) -> Option<usize> {
+    match shape {
+        Shape::Fluid(info) => Some(info.face.axis().index()),
+        Shape::Ramp(info) => Some(info.floor.axis().index()),
+        _ => None,
     }
 }
 
@@ -113,9 +126,9 @@ impl<L: Light> Quad<L> {
 
                 // A fluid surface rides a height field its neighbors share,
                 // so each vertex sits wherever the four columns meeting at
-                // it agree it does rather than on the block boundary.
-                if let Shape::Fluid(info) = shape {
-                    let axis = info.face.axis().index();
+                // it agree it does rather than on the block boundary. A
+                // ramp's slope and sides have corners lowered to its floor.
+                if let Some(axis) = corner_offset_axis(shape) {
                     for (vert, offset) in verts.iter_mut().zip(self.corner_offsets) {
                         vert[axis] += offset as f32 * scale;
                     }
@@ -190,7 +203,10 @@ impl<L: Light> Quad<L> {
     ///
     /// `shape` is used to follow a [`Shape::Fluid`] surface: the side
     /// face of a half-full fluid is a trapezoid, and its texture is
-    /// cropped to match rather than squashed into it.
+    /// cropped to match rather than squashed into it. A [`Shape::Ramp`]'s
+    /// triangular sides are cropped the same way, so they tile with the
+    /// blocks beside them; its slope, whose lowered corners move along its
+    /// own normal axis, keeps the whole texture stretched over it.
     pub fn texture_coordinates(
         &self,
         face: impl Into<Face>,
@@ -233,12 +249,12 @@ impl<L: Light> Quad<L> {
                     ]
                 };
 
-                // Track a fluid surface, so a side face crops its texture
-                // instead of stretching it. On the surface face itself the
-                // fluid axis is the normal, so nothing moves. Applied
+                // Track a fluid surface or a ramp's lowered corners, so a
+                // side face crops its texture instead of stretching it. On
+                // the surface face itself (or the slope) the displacement
+                // axis is the normal, so nothing moves. Applied
                 // before the flip, which mirrors the finished coordinate.
-                if let Shape::Fluid(info) = shape {
-                    let fluid_idx = info.face.axis().index();
+                if let Some(fluid_idx) = corner_offset_axis(shape) {
                     let component = if fluid_idx == u_idx {
                         Some(0)
                     } else if fluid_idx == v_idx {
@@ -492,12 +508,12 @@ fn boundary_footprint<B: Block>(block: &B, face: AlignedFace) -> [Option<Rect16>
             let half = ft / 2;
             let floor_axis = info.floor.axis().index();
             let back_axis = info.back.axis().index();
-            // The floor half and the far half along the floor axis, and
-            // the back half along the back axis, as 1/16th ranges.
-            let (floor_lo, floor_hi, far_lo, far_hi) = if info.floor.is_positive() {
-                (half, ft, 0, half)
+            // The floor half along the floor axis, and the back half along
+            // the back axis, as 1/16th ranges.
+            let (floor_lo, floor_hi) = if info.floor.is_positive() {
+                (half, ft)
             } else {
-                (0, half, half, ft)
+                (0, half)
             };
             let (back_lo, back_hi) = if info.back.is_positive() {
                 (half, ft)
@@ -522,26 +538,64 @@ fn boundary_footprint<B: Block>(block: &B, face: AlignedFace) -> [Option<Rect16>
                 ]
             } else {
                 // A side: the slab's strip and the step's quarter, an L.
-                let slab = Rect16::strip(floor_axis == v_idx, floor_lo, floor_hi);
-                let step = if floor_axis == u_idx {
-                    Rect16 {
-                        u0: far_lo,
-                        u1: far_hi,
-                        v0: back_lo,
-                        v1: back_hi,
-                    }
-                } else {
-                    Rect16 {
-                        u0: back_lo,
-                        u1: back_hi,
-                        v0: far_lo,
-                        v1: far_hi,
-                    }
-                };
+                let [slab, step] = stair_side(info.floor, info.back, u_idx, v_idx);
                 [Some(slab), Some(step)]
             }
         }
+        // The floor and the back, like a stair. A side is a triangle, which
+        // no rectangle inside it seals usefully, so it claims nothing: a
+        // neighbor's face against it is always drawn, as it should be, since
+        // the triangle never covers all of anything.
+        Shape::Ramp(info) => {
+            debug_assert_ne!(
+                info.floor.axis(),
+                info.back.axis(),
+                "a ramp's floor and back must be perpendicular"
+            );
+            if face == info.floor || face == info.back {
+                [Some(Rect16::FULL), None]
+            } else {
+                [None; 2]
+            }
+        }
     }
+}
+
+/// The L a stair with this `floor` and `back` shows on either side, as
+/// `[slab, step]` on the side face's `(u, v)`: the half strip along the
+/// floor, and the quarter on it against the back.
+#[inline]
+fn stair_side(floor: AlignedFace, back: AlignedFace, u_idx: usize, v_idx: usize) -> [Rect16; 2] {
+    let ft = FULL_THICKNESS as u8;
+    let half = ft / 2;
+    let floor_axis = floor.axis().index();
+    let (floor_lo, floor_hi, far_lo, far_hi) = if floor.is_positive() {
+        (half, ft, 0, half)
+    } else {
+        (0, half, half, ft)
+    };
+    let (back_lo, back_hi) = if back.is_positive() {
+        (half, ft)
+    } else {
+        (0, half)
+    };
+    let slab = Rect16::strip(floor_axis == v_idx, floor_lo, floor_hi);
+    let step = if floor_axis == u_idx {
+        Rect16 {
+            u0: far_lo,
+            u1: far_hi,
+            v0: back_lo,
+            v1: back_hi,
+        }
+    } else {
+        Rect16 {
+            u0: back_lo,
+            u1: back_hi,
+            v0: far_lo,
+            v1: far_hi,
+        }
+    };
+    [slab, step]
 }
 
 /// Whether `footprint` covers all of `rect`: inside one of its rectangles,
@@ -684,9 +738,14 @@ fn is_culled_at_boundary<B: Block>(
     face: AlignedFace,
     rect: &Rect16,
 ) -> bool {
-    if !neighbor_covers_face_region(block, neighbor, face, rect) {
-        return false;
-    }
+    neighbor_covers_face_region(block, neighbor, face, rect)
+        && cull_modes_hide(block, neighbor, face)
+}
+
+/// Whether, the neighbor covering a face of the block, their materials say
+/// the face goes undrawn.
+#[inline]
+fn cull_modes_hide<B: Block>(block: &B, neighbor: &B, face: AlignedFace) -> bool {
     match (block.cull_mode(), neighbor.cull_mode()) {
         (_, CullMode::Opaque) => true,
         (CullMode::TransparentMerged(a), CullMode::TransparentMerged(b)) => a == b,
@@ -792,26 +851,118 @@ fn stair_entries<B: Block>(
             )),
         ]
     } else {
-        let slab = Rect16::strip(floor_axis == v_idx, floor_lo, floor_hi);
-        let step = if floor_axis == u_idx {
-            Rect16 {
-                u0: far_lo,
-                u1: far_hi,
-                v0: back_lo,
-                v1: back_hi,
-            }
-        } else {
-            Rect16 {
-                u0: back_lo,
-                u1: back_hi,
-                v0: far_lo,
-                v1: far_hi,
-            }
-        };
+        let [slab, step] = stair_side(info.floor, info.back, u_idx, v_idx);
         [
             Some((entry_at(block, boundary, slab), true)),
             Some((entry_at(block, boundary, step), true)),
         ]
+    }
+}
+
+/// The quad a ramp shows on `face`, by shape alone — no neighbor culling —
+/// or `None` on its front, which is only an edge.
+///
+/// Every quad is the whole face at the boundary, some with corners lowered
+/// to the floor by a full cell ([`Quad::corner_offsets`]):
+///
+/// - the floor face and the back face, untouched;
+/// - opposite the floor, the slope: both front corners lowered, which tilts
+///   the face down onto the front edge of the floor;
+/// - the two sides: the one corner that is both at the front and away from
+///   the floor lowered onto the one below it, which leaves the triangle.
+///
+/// The floor and back are the caller's to cull like any boundary face, the
+/// sides by [`ramp_side_culled`]; the slope never is, since only its back
+/// edge is on the boundary.
+#[inline]
+fn ramp_entry<B: Block>(
+    block: &B,
+    info: RampInfo,
+    face: AlignedFace,
+    u_idx: usize,
+    v_idx: usize,
+) -> Option<MaskEntry<B>> {
+    debug_assert_ne!(
+        info.floor.axis(),
+        info.back.axis(),
+        "a ramp's floor and back must be perpendicular"
+    );
+    if face == info.front() {
+        return None;
+    }
+    let ft = FULL_THICKNESS as u8;
+    let mut entry = entry_at(block, if face.is_positive() { ft } else { 0 }, Rect16::FULL);
+    if face == info.floor || face == info.back {
+        return Some(entry);
+    }
+    let floor_axis = info.floor.axis().index();
+    let back_axis = info.back.axis().index();
+    // A whole cell toward the floor.
+    let drop = if info.floor.is_positive() {
+        ft as i8
+    } else {
+        -(ft as i8)
+    };
+    for (vertex, offset) in entry.corner_offsets.iter_mut().enumerate() {
+        // Where this mask-local vertex sits on each axis.
+        let mut positive = [false; 3];
+        positive[u_idx] = vertex == 1 || vertex == 2;
+        positive[v_idx] = vertex == 2 || vertex == 3;
+        positive[face.axis().index()] = face.is_positive();
+        let front = positive[back_axis] != info.back.is_positive();
+        let far = positive[floor_axis] != info.floor.is_positive();
+        if front && far {
+            *offset = drop;
+        }
+    }
+    Some(entry)
+}
+
+/// Whether `neighbor` hides the ramp's triangular side on `face`.
+///
+/// Footprints are rectangles and a triangle is not one, so this asks for the
+/// L of a stair with the same floor and back, which contains the triangle: a
+/// whole block covers it, and so does a stair facing the same way. An
+/// identical ramp covers the triangle exactly without covering the L, and is
+/// asked about by name.
+#[inline]
+fn ramp_side_culled<B: Block>(
+    block: &B,
+    neighbor: &B,
+    info: RampInfo,
+    face: AlignedFace,
+    u_idx: usize,
+    v_idx: usize,
+) -> bool {
+    let covered = match neighbor.shape() {
+        Shape::Ramp(other) => other == info,
+        _ => {
+            let footprint = boundary_footprint(neighbor, face.opposite());
+            stair_side(info.floor, info.back, u_idx, v_idx)
+                .iter()
+                .all(|part| footprint_covers(&footprint, part))
+        }
+    };
+    covered && cull_modes_hide(block, neighbor, face)
+}
+
+/// Gives each lowered corner of a ramp's side the AO and light of the
+/// corner it was lowered onto. It was sampled where it started, a cell
+/// away, and the triangle should shade as the three corners it actually
+/// has.
+#[inline]
+fn collapse_ramp_side_lighting<B: Block>(entry: &mut MaskEntry<B>, info: RampInfo, u_idx: usize) {
+    // The mask-local corner across the floor axis from each corner.
+    let across = if info.floor.axis().index() == u_idx {
+        [1, 0, 3, 2]
+    } else {
+        [3, 2, 1, 0]
+    };
+    for vertex in 0..4 {
+        if entry.corner_offsets[vertex] != 0 {
+            entry.ao[vertex] = entry.ao[across[vertex]];
+            entry.light[vertex] = entry.light[across[vertex]];
+        }
     }
 }
 
@@ -833,6 +984,7 @@ fn mask_entry_for_shape<B: Block>(
         Shape::Stair(info) => {
             return stair_entries(block, info, face, u_idx, v_idx)[0].map(|(entry, _)| entry)
         }
+        Shape::Ramp(info) => return ramp_entry(block, info, face, u_idx, v_idx),
         // Facade emits one quad on its own face, offset `info.offset`
         // sixteenths inward.
         Shape::Facade(info) => {
@@ -975,6 +1127,7 @@ fn compute_slab_mask_entry<B: Block>(
         | Shape::Facade(_)
         | Shape::Inset(_)
         | Shape::Stair(_)
+        | Shape::Ramp(_)
         | Shape::Fluid(_) => unreachable!(),
     };
 
@@ -1602,6 +1755,15 @@ fn emit_cross_quads<B: Block>(
 /// give it must agree — which forces the run to be flat along the
 /// direction it merges in. Standing water merges like stone; a slope
 /// cannot merge at all, and never silently loses its crease.
+///
+/// A ramp's offsets are not shared with its neighbors, so the argument
+/// does not hold for it: two ramps in a row along their run are identical
+/// entries, and merging them would draw one slope twice as long and none
+/// of the sawtooth. So a run only extends along a direction its offsets do
+/// not vary in — which lets a slope merge across its width and never along
+/// its run, and leaves a fluid exactly as it was, since an entry of one
+/// whose offsets vary along a direction never has an identical neighbor
+/// there in the first place.
 #[allow(clippy::too_many_arguments)]
 #[inline]
 fn emit_mask<B: Block, S: ChunkShape>(
@@ -1632,9 +1794,15 @@ fn emit_mask<B: Block, S: ChunkShape>(
             let mut height = 1;
 
             if greedy {
+                // Whether the corner offsets are the same at both ends of
+                // the entry along u, and along v.
+                let o = entry.corner_offsets;
+                let flat_u = o[0] == o[1] && o[3] == o[2];
+                let flat_v = o[0] == o[3] && o[1] == o[2];
+
                 // Find widest run of identical entries along u.
                 // Sub-block u extents (slabs, stairs) must not merge along u.
-                if entry.u_intra_extent == ft {
+                if entry.u_intra_extent == ft && flat_u {
                     while u + width < S::SIZE && mask[v][u + width] == Some(entry) {
                         width += 1;
                     }
@@ -1642,7 +1810,7 @@ fn emit_mask<B: Block, S: ChunkShape>(
 
                 // Extend the run along v.
                 // Sub-block v extents (slabs, stairs) must not merge along v.
-                if entry.v_intra_extent == ft {
+                if entry.v_intra_extent == ft && flat_v {
                     'extend: while v + height < S::SIZE {
                         for du in 0..width {
                             if mask[v + height][u + du] != Some(entry) {
@@ -1855,6 +2023,23 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
                             second = keep(next);
                             keep(first)
                         }
+                        Shape::Ramp(info) => {
+                            // The floor and back are culled like any whole
+                            // face, the triangular sides by what can cover a
+                            // triangle, and the slope never.
+                            let culled = if face == info.floor || face == info.back {
+                                is_culled_at_boundary(block, neighbor, face, &Rect16::FULL)
+                            } else if face.axis() == info.side_axis() {
+                                ramp_side_culled(block, neighbor, info, face, u_idx, v_idx)
+                            } else {
+                                false
+                            };
+                            if culled {
+                                None
+                            } else {
+                                ramp_entry(block, info, face, u_idx, v_idx)
+                            }
+                        }
                         Shape::Fluid(info) => {
                             debug_assert!(
                                 B::FLUID_ENABLED,
@@ -1954,6 +2139,20 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
                         };
                         if let Some(ref mut e) = entry {
                             light_entry(e, false);
+                            if let Shape::Ramp(info) = shape {
+                                if face.axis() == info.side_axis() {
+                                    collapse_ramp_side_lighting(e, info, u_idx);
+                                } else if face == info.slope_face() {
+                                    // Lit from the cell over the slope, but
+                                    // that cell's corners are not the slope's:
+                                    // AO read there would darken every seam
+                                    // of a flight, where the next ramp's floor
+                                    // lies flush with this one's top edge and
+                                    // nothing is in the way. Like a rail
+                                    // ramp's, the slope goes without.
+                                    e.ao = [3; 4];
+                                }
+                            }
                         }
                         if let Some(ref mut e) = second {
                             light_entry(e, false);
