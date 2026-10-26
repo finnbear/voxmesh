@@ -306,8 +306,16 @@ fn a_wet_ladders_surface_is_shaded_like_the_water_beside_it() {
 #[test]
 fn two_wet_ladders_join_their_water() {
     let q = mesh(&[(0, 0, 0, B::WetLadder), (1, 0, 0, B::WetLadder)]);
-    assert_eq!(q.fluid[AlignedFace::PosX.index()].len(), 0);
-    assert_eq!(q.fluid[AlignedFace::NegX.index()].len(), 0);
+    // No face between them: each side keeps only its outer face, out into
+    // the air.
+    for (face, outer) in [
+        (AlignedFace::PosX, UVec3::new(1, 0, 0)),
+        (AlignedFace::NegX, UVec3::ZERO),
+    ] {
+        let quads = &q.fluid[face.index()];
+        assert_eq!(quads.len(), 1, "{face:?}");
+        assert_eq!(quads[0].voxel_position(face), outer, "{face:?}");
+    }
     // Merged into one surface over the pair, as two wet slabs are.
     assert_eq!(q.fluid[AlignedFace::PosY.index()].len(), 1);
 }

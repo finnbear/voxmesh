@@ -946,22 +946,60 @@ fn ramp_side_culled<B: Block>(
     covered && cull_modes_hide(block, neighbor, face)
 }
 
-/// Gives each lowered corner of a ramp's side the AO and light of the
-/// corner it was lowered onto. It was sampled where it started, a cell
-/// away, and the triangle should shade as the three corners it actually
-/// has.
+/// Relights the corners [`Quad::corner_offsets`] moved a whole cell from
+/// where they ended up. Lighting is sampled at the corners of the cell a
+/// face sits in, and these left it. Only a ramp's do: a fluid's surface
+/// moves a vertex less than a cell, never off its own corner.
+///
+/// Moved along the normal — the slope's front corners, lowered onto the
+/// floor — a corner stands a layer over from the rest and is shaded from
+/// there, by `sample_layer(toward)`, as whatever meets it on that layer is.
+/// Moved across the face — a side's corner, folded down into a triangle —
+/// it lands on the corner across the cell from it, and takes that one's AO
+/// and light.
 #[inline]
-fn collapse_ramp_side_lighting<B: Block>(entry: &mut MaskEntry<B>, info: RampInfo, u_idx: usize) {
-    // The mask-local corner across the floor axis from each corner.
-    let across = if info.floor.axis().index() == u_idx {
-        [1, 0, 3, 2]
+fn relight_moved_corners<B: Block>(
+    entry: &mut MaskEntry<B>,
+    axis: usize,
+    normal_idx: usize,
+    u_idx: usize,
+    sample_layer: impl Fn(isize) -> ([u8; 4], [<B::Light as Light>::Average; 4]),
+) {
+    let ft = FULL_THICKNESS as i8;
+    let moved = entry.corner_offsets.map(|offset| offset.abs() == ft);
+    if !moved.contains(&true) {
+        return;
+    }
+    if axis == normal_idx {
+        for toward in [-1, 1] {
+            let mut layer = None;
+            for vertex in 0..4 {
+                if moved[vertex] && entry.corner_offsets[vertex].signum() as isize == toward {
+                    let (ao, light) = *layer.get_or_insert_with(|| sample_layer(toward));
+                    entry.ao[vertex] = ao[vertex];
+                    entry.light[vertex] = light[vertex];
+                }
+            }
+        }
     } else {
-        [3, 2, 1, 0]
-    };
-    for vertex in 0..4 {
-        if entry.corner_offsets[vertex] != 0 {
-            entry.ao[vertex] = entry.ao[across[vertex]];
-            entry.light[vertex] = entry.light[across[vertex]];
+        // The mask-local corner across the cell along `axis` from each.
+        let across = if axis == u_idx {
+            [1, 0, 3, 2]
+        } else {
+            [3, 2, 1, 0]
+        };
+        for vertex in 0..4 {
+            if moved[vertex] {
+                // Onto the corner across, not out of the cell.
+                let positive = if axis == u_idx {
+                    vertex == 1 || vertex == 2
+                } else {
+                    vertex == 2 || vertex == 3
+                };
+                debug_assert_eq!(entry.corner_offsets[vertex] < 0, positive);
+                entry.ao[vertex] = entry.ao[across[vertex]];
+                entry.light[vertex] = entry.light[across[vertex]];
+            }
         }
     }
 }
@@ -1420,7 +1458,6 @@ fn compute_ao_light<B: Block>(
         unsafe { data.get_unchecked((n_idx as isize + du + dv) as usize) }
     };
 
-    let center = get(0, 0);
     let neg_u = get(-u_stride, 0);
     let pos_u = get(u_stride, 0);
     let neg_v = get(0, -v_stride);
@@ -1463,25 +1500,40 @@ fn compute_ao_light<B: Block>(
         [3; 4]
     };
 
+    (ao, compute_light(data, n_idx, u_stride, v_stride))
+}
+
+/// The smooth-light half of [`compute_ao_light`], for a face whose AO is
+/// settled some other way. Same arguments, same vertex order.
+#[inline]
+fn compute_light<B: Block>(
+    data: &[B],
+    n_idx: usize,
+    u_stride: isize,
+    v_stride: isize,
+) -> [<B::Light as Light>::Average; 4] {
+    if !B::Light::LIGHT_ENABLED {
+        return Default::default();
+    }
+    let light = |du: isize, dv: isize| unsafe {
+        data.get_unchecked((n_idx as isize + du + dv) as usize)
+            .light()
+    };
     // Smooth light: each vertex averages light from the 4 surrounding
     // voxels unconditionally. Unlike AO, we do not exclude opaque
     // neighbors — their stored light values already reflect blockage,
     // and excluding them would cause different blocks sharing a vertex
     // to compute different averages (since one block's "side" neighbor
     // is another's "corner"), producing visible discontinuities.
-    let light = if B::Light::LIGHT_ENABLED {
-        let cl = center.light();
-        [
-            B::Light::average(&[cl, neg_u.light(), neg_v.light(), neg_u_neg_v.light()]),
-            B::Light::average(&[cl, pos_u.light(), neg_v.light(), pos_u_neg_v.light()]),
-            B::Light::average(&[cl, pos_u.light(), pos_v.light(), pos_u_pos_v.light()]),
-            B::Light::average(&[cl, neg_u.light(), pos_v.light(), neg_u_pos_v.light()]),
-        ]
-    } else {
-        Default::default()
-    };
-
-    (ao, light)
+    let cl = light(0, 0);
+    let (neg_u, pos_u) = (light(-u_stride, 0), light(u_stride, 0));
+    let (neg_v, pos_v) = (light(0, -v_stride), light(0, v_stride));
+    [
+        B::Light::average(&[cl, neg_u, neg_v, light(-u_stride, -v_stride)]),
+        B::Light::average(&[cl, pos_u, neg_v, light(u_stride, -v_stride)]),
+        B::Light::average(&[cl, pos_u, pos_v, light(u_stride, v_stride)]),
+        B::Light::average(&[cl, neg_u, pos_v, light(-u_stride, v_stride)]),
+    ]
 }
 
 /// Moves per-vertex AO and light, computed at a cell face's four corners,
@@ -2096,6 +2148,8 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
 
                     // Compute AO and smooth light for visible faces.
                     if B::Light::AO_ENABLED || B::Light::LIGHT_ENABLED {
+                        let is_ramp_slope =
+                            matches!(shape, Shape::Ramp(info) if face == info.slope_face());
                         let light_entry = |e: &mut MaskEntry<B>, overlay: bool| {
                             // Faces inset into the block sample AO/light
                             // at the block's own plane rather than the
@@ -2124,35 +2178,41 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
                             } else {
                                 (n_idx, face.opposite())
                             };
-                            let (ao, light) = compute_ao_light(
-                                data,
-                                sample_idx,
-                                u_stride as isize,
-                                v_stride as isize,
-                                ao_face,
-                            );
-                            // Sampled at the cell's corners; this quad may
-                            // only cover part of the cell.
-                            let (ao, light) = resample_to_rect::<B>(ao, light, &entry_rect(e));
-                            e.ao = ao;
-                            e.light = light;
+                            // A ramp's slope is lit from the cell over it,
+                            // but that cell's corners are not the slope's:
+                            // AO read there would darken every seam of a
+                            // flight, where the next ramp's floor lies flush
+                            // with this one's top edge and nothing is in the
+                            // way. Like a rail ramp's, the slope goes without.
+                            let shaded = overlay || !is_ramp_slope;
+                            let rect = entry_rect(e);
+                            let sample = |at: usize| {
+                                let (u, v) = (u_stride as isize, v_stride as isize);
+                                let (ao, light) = if shaded {
+                                    compute_ao_light(data, at, u, v, ao_face)
+                                } else {
+                                    ([3; 4], compute_light(data, at, u, v))
+                                };
+                                // Sampled at the cell's corners; this quad
+                                // may only cover part of the cell.
+                                resample_to_rect::<B>(ao, light, &rect)
+                            };
+                            (e.ao, e.light) = sample(sample_idx);
+                            // The fluid in a solid's cell moves its vertices
+                            // as a fluid does, not as the solid would.
+                            if let Some(axis) = corner_offset_axis(shape).filter(|_| !overlay) {
+                                relight_moved_corners(e, axis, normal_idx, u_idx, |toward| {
+                                    let at =
+                                        (sample_idx as isize + toward * n_stride as isize) as usize;
+                                    // Back into the cell or out to the
+                                    // neighbor: the padding goes no further.
+                                    debug_assert!(at == idx || at == n_idx);
+                                    sample(at)
+                                });
+                            }
                         };
                         if let Some(ref mut e) = entry {
                             light_entry(e, false);
-                            if let Shape::Ramp(info) = shape {
-                                if face.axis() == info.side_axis() {
-                                    collapse_ramp_side_lighting(e, info, u_idx);
-                                } else if face == info.slope_face() {
-                                    // Lit from the cell over the slope, but
-                                    // that cell's corners are not the slope's:
-                                    // AO read there would darken every seam
-                                    // of a flight, where the next ramp's floor
-                                    // lies flush with this one's top edge and
-                                    // nothing is in the way. Like a rail
-                                    // ramp's, the slope goes without.
-                                    e.ao = [3; 4];
-                                }
-                            }
                         }
                         if let Some(ref mut e) = second {
                             light_entry(e, false);

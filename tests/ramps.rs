@@ -11,7 +11,7 @@
 mod common;
 
 use common::*;
-use glam::{UVec2, UVec3, Vec2, Vec3};
+use glam::{IVec3, UVec2, UVec3, Vec2, Vec3};
 use voxmesh::*;
 
 const EPSILON: f32 = 1e-6;
@@ -415,6 +415,208 @@ fn every_orientation_is_the_same_wedge() {
                         assert!(face == floor || face == back, "{info:?} {face:?}");
                         assert_eq!(distinct(&verts).len(), 4, "{info:?}");
                     }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_lit_flight_shades_as_one_slope() {
+    // Where one ramp's top edge meets the bottom edge of the ramp above, both
+    // have to take the same light, or a lit flight shades as a sawtooth. So
+    // does the bottom ramp's front edge, where it meets the ground in front.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum B {
+        Air(u8),
+        Ground(u8),
+        Wedge(RampInfo, u8),
+    }
+    impl Block for B {
+        type TransparentGroup = ();
+        type Light = u8;
+        fn shape(&self) -> Shape {
+            match self {
+                B::Air(_) | B::Ground(_) => Shape::WholeBlock,
+                B::Wedge(info, _) => Shape::Ramp(*info),
+            }
+        }
+        fn cull_mode(&self) -> CullMode {
+            match self {
+                B::Air(_) => CullMode::Empty,
+                B::Ground(_) | B::Wedge(..) => CullMode::Opaque,
+            }
+        }
+        fn light(&self) -> u8 {
+            match *self {
+                B::Air(light) | B::Ground(light) | B::Wedge(_, light) => light,
+            }
+        }
+    }
+    for floor in AlignedFace::ALL {
+        for back in AlignedFace::ALL {
+            if floor.axis() == back.axis() {
+                continue;
+            }
+            let info = RampInfo { floor, back };
+            let up = info.slope_face().normal();
+            let back_dir = back.normal();
+            let mut side_dir = IVec3::ZERO;
+            side_dir[info.side_axis().index()] = 1;
+            let origin = IVec3::splat(4);
+            // Light that grows with height, as under a lamp, and varies along
+            // the other two axes as well, so a corner lit from the wrong cell
+            // of its level shows.
+            let light = |p: IVec3| {
+                let d = p - origin + 4;
+                (16 * d.dot(up.abs()) + 4 * d.dot(back_dir.abs()) + d.dot(side_dir)) as u8
+            };
+            let at = |p: IVec3| p.as_uvec3();
+            let mut chunk = PaddedChunk16::<B>::new_filled(B::Air(0));
+            for x in -3..=3 {
+                for y in -3..=3 {
+                    for z in -3..=3 {
+                        let p = origin + IVec3::new(x, y, z);
+                        chunk.set(at(p), B::Air(light(p)));
+                    }
+                }
+            }
+            // Each ramp one up and one back from the last.
+            let ramps = [0, 1, 2].map(|k| origin + k * (up + back_dir));
+            for p in ramps {
+                chunk.set(at(p), B::Wedge(info, light(p)));
+            }
+            // The ground the flight starts from, in front of the bottom ramp
+            // and a level down, so its top meets the ramp's front edge.
+            let ground = origin - up - back_dir;
+            chunk.set(at(ground), B::Ground(light(ground)));
+
+            let q = mesh_chunk(&chunk, false);
+            let face = info.slope_face();
+            let mut seen: Vec<(Vec3, f32)> = Vec::new();
+            let mut shared = 0;
+            for quad in &q.faces[face.index()] {
+                let shape = if quad.voxel_position(face) == at(ground) {
+                    Shape::WholeBlock
+                } else {
+                    Shape::Ramp(info)
+                };
+                for (p, light) in quad.positions(face, shape).into_iter().zip(quad.light) {
+                    if let Some(&(_, other)) = seen.iter().find(|(o, _)| o.distance(p) < EPSILON) {
+                        shared += 1;
+                        assert!(
+                            (other - light).abs() < EPSILON,
+                            "{info:?} {p:?}: {other} and {light}"
+                        );
+                    } else {
+                        seen.push((p, light));
+                    }
+                }
+            }
+            assert_eq!(shared, 6, "{info:?}: three seams, two corners each");
+        }
+    }
+}
+
+#[test]
+fn a_ramps_sides_shade_like_a_whole_blocks() {
+    // Each triangular side is a whole block's side with one corner folded
+    // onto another, so every corner it keeps is shaded as that block's side
+    // would be at the same point: the folded one too, since it lands on one
+    // of the others.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum B {
+        Air(u8),
+        Stone(u8),
+        Wedge(RampInfo, u8),
+    }
+    impl Block for B {
+        type TransparentGroup = ();
+        type Light = u8;
+        fn shape(&self) -> Shape {
+            match self {
+                B::Air(_) | B::Stone(_) => Shape::WholeBlock,
+                B::Wedge(info, _) => Shape::Ramp(*info),
+            }
+        }
+        fn cull_mode(&self) -> CullMode {
+            match self {
+                B::Air(_) => CullMode::Empty,
+                B::Stone(_) | B::Wedge(..) => CullMode::Opaque,
+            }
+        }
+        fn light(&self) -> u8 {
+            match *self {
+                B::Air(light) | B::Stone(light) | B::Wedge(_, light) => light,
+            }
+        }
+    }
+    for floor in AlignedFace::ALL {
+        for back in AlignedFace::ALL {
+            if floor.axis() == back.axis() {
+                continue;
+            }
+            let info = RampInfo { floor, back };
+            let origin = IVec3::splat(4);
+            let light = |p: IVec3| {
+                let d = p - origin + 4;
+                (16 * d.x + 4 * d.y + d.z) as u8
+            };
+            let at = |p: IVec3| p.as_uvec3();
+            let scene = |center: B| {
+                let mut chunk = PaddedChunk16::<B>::new_filled(B::Air(0));
+                for x in -3..=3 {
+                    for y in -3..=3 {
+                        for z in -3..=3 {
+                            let p = origin + IVec3::new(x, y, z);
+                            chunk.set(at(p), B::Air(light(p)));
+                        }
+                    }
+                }
+                // Beside each side, a block that shades it from behind and
+                // one from below, so the corners differ in AO as well.
+                let side = info.side_axis();
+                for sign in [-1, 1] {
+                    let mut beside = origin;
+                    beside[side.index()] += sign;
+                    for p in [beside + back.normal(), beside + floor.normal()] {
+                        chunk.set(at(p), B::Stone(light(p)));
+                    }
+                }
+                chunk.set(at(origin), center);
+                mesh_chunk(&chunk, false)
+            };
+            let ramp = scene(B::Wedge(info, light(origin)));
+            let whole = scene(B::Stone(light(origin)));
+            for face in AlignedFace::ALL {
+                if face.axis() != info.side_axis() {
+                    continue;
+                }
+                let of = |q: &Quads<u8>| {
+                    q.faces[face.index()]
+                        .iter()
+                        .find(|quad| quad.voxel_position(face) == at(origin))
+                        .cloned()
+                        .unwrap_or_else(|| panic!("{info:?} {face:?}"))
+                };
+                let (side, full) = (of(&ramp), of(&whole));
+                let full_verts = full.positions(face, Shape::WholeBlock);
+                for (i, p) in side
+                    .positions(face, Shape::Ramp(info))
+                    .into_iter()
+                    .enumerate()
+                {
+                    let j = full_verts
+                        .iter()
+                        .position(|o| o.distance(p) < EPSILON)
+                        .unwrap_or_else(|| panic!("{info:?} {face:?} {p:?} off the face"));
+                    assert_eq!(side.ao[i], full.ao[j], "{info:?} {face:?} {p:?} ao");
+                    assert!(
+                        (side.light[i] - full.light[j]).abs() < EPSILON,
+                        "{info:?} {face:?} {p:?}: {} and {}",
+                        side.light[i],
+                        full.light[j]
+                    );
                 }
             }
         }
