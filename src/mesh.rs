@@ -377,6 +377,104 @@ struct MaskEntry<B: Block> {
     light: [<<B as Block>::Light as Light>::Average; 4],
 }
 
+// A cell's class, worked out once per chunk by `mesh_chunk_into` from what
+// the block says of itself, for the answers asked of it most: bits of a `u8`.
+
+/// Shows nothing in the faces' passes: air, or anything else unrenderable,
+/// or a cross (which has a pass of its own) — with no fluid standing in it.
+const SILENT: u8 = 1;
+/// A renderable whole block with no fluid standing in it: it shows a face
+/// unless its neighbor hides it.
+const WHOLE: u8 = 2;
+/// An opaque whole block, which hides a whole block's face against it.
+const WHOLE_OPAQUE: u8 = 4;
+/// A renderable cross, for the cross pass.
+const CROSS: u8 = 8;
+/// Darkens AO on every face ([`shape_ao_opaque`]): an AO-opaque whole block.
+const AO_ALWAYS: u8 = 16;
+/// Darkens AO on no face: not AO-opaque.
+const AO_NEVER: u8 = 32;
+
+/// [`SILENT`], [`WHOLE`] and [`WHOLE_OPAQUE`] as bits, a padded row of cells
+/// to a word, both along x and along z: for a face pass to find the few cells
+/// of a row that may show a face with a few bit operations, rather than by
+/// looking at each cell (with a stride, along some axes, that the cache
+/// doesn't like).
+struct RowBits {
+    padded: usize,
+    /// Indexed `z * padded + y`; bits over x.
+    along_x: Vec<[u64; 3]>,
+    /// Indexed `y * padded + x`; bits over z.
+    along_z: Vec<[u64; 3]>,
+}
+
+impl RowBits {
+    const SILENT: usize = 0;
+    const WHOLE: usize = 1;
+    const WHOLE_OPAQUE: usize = 2;
+
+    fn new<S: ChunkShape>(classes: &[u8]) -> Self {
+        let p = S::PADDED;
+        assert!(
+            p <= u64::BITS as usize,
+            "chunks wider than 62 are unsupported"
+        );
+        let mut along_x = vec![[0u64; 3]; p * p];
+        let mut along_z = vec![[0u64; 3]; p * p];
+        const _: () = assert!(SILENT == 1 && WHOLE == 2 && WHOLE_OPAQUE == 4);
+        for z in 0..p {
+            for y in 0..p {
+                let row = &classes[(z * p + y) * p..][..p];
+                let along_z = &mut along_z[y * p..][..p];
+                let mut x_bits = [0u64; 3];
+                for (x, (&class, z_bits)) in row.iter().zip(along_z).enumerate() {
+                    // The three flags are the class's low three bits, in the
+                    // order of `Self::SILENT` and the rest.
+                    for k in 0..3 {
+                        let has = (class >> k) as u64 & 1;
+                        x_bits[k] |= has << x;
+                        z_bits[k] |= has << z;
+                    }
+                }
+                along_x[z * p + y] = x_bits;
+            }
+        }
+        Self {
+            padded: p,
+            along_x,
+            along_z,
+        }
+    }
+
+    /// The cells of `face`'s row `v` of `layer` (inner coordinates) that may
+    /// show a face: a bit per `u`. The others are [`SILENT`], or a whole
+    /// block against an opaque whole block.
+    #[inline]
+    fn cells(&self, face: AlignedFace, layer: usize, v: usize, size: usize) -> u64 {
+        let p = self.padded;
+        let (l, r) = (PADDING + layer, PADDING + v);
+        let toward = |l: usize| if face.is_positive() { l + 1 } else { l - 1 };
+        // Each face's (layer, v) as a row of the orientation whose bits run
+        // along its u (see `face_strides`).
+        let (own, neighbor) = match face {
+            // Normal z, u x, v y.
+            AlignedFace::PosZ | AlignedFace::NegZ => {
+                (self.along_x[l * p + r], self.along_x[toward(l) * p + r])
+            }
+            // Normal x, u z, v y.
+            AlignedFace::PosX | AlignedFace::NegX => {
+                (self.along_z[r * p + l], self.along_z[r * p + toward(l)])
+            }
+            // Normal y, u z, v x.
+            AlignedFace::PosY | AlignedFace::NegY => {
+                (self.along_z[l * p + r], self.along_z[toward(l) * p + r])
+            }
+        };
+        let cells = !own[Self::SILENT] & !(own[Self::WHOLE] & neighbor[Self::WHOLE_OPAQUE]);
+        (cells >> PADDING) & ((1u64 << size) - 1)
+    }
+}
+
 /// Returns the two axis indices perpendicular to the given axis,
 /// used by diagonal cross blocks to determine the crossing plane.
 #[inline]
@@ -1436,63 +1534,72 @@ fn shape_ao_opaque<B: Block>(block: &B, face: AlignedFace) -> bool {
     block.ao_opaque() && shape_fills_face(block, face)
 }
 
-/// Computes per-vertex AO and smooth light for a face cell.
+/// [`shape_ao_opaque`] for the cell at `idx` of `data`, answered by its class
+/// (see [`AO_ALWAYS`]) where that says.
+#[inline]
+fn classed_ao_opaque<B: Block>(data: &[B], classes: &[u8], idx: usize, face: AlignedFace) -> bool {
+    // SAFETY: the caller's index is inside the padded chunk, which both
+    // slices cover.
+    let class = unsafe { *classes.get_unchecked(idx) };
+    if class & AO_ALWAYS != 0 {
+        true
+    } else if class & AO_NEVER != 0 {
+        false
+    } else {
+        shape_ao_opaque(unsafe { data.get_unchecked(idx) }, face)
+    }
+}
+
+/// Computes per-vertex AO for a face cell; its smooth light is
+/// [`VertexLights::corners`].
 ///
 /// `data` is the padded chunk array. `n_idx` is the linear index of the
 /// voxel one step along the face normal from the current block.
 /// `u_stride` and `v_stride` are the linear index steps along the face's
 /// tangent axes. `face` is the face being meshed.
 ///
-/// Returns `(ao, light)` arrays in mask-local vertex order:
+/// Returns AO in mask-local vertex order:
 /// `[umin/vmin, umax/vmin, umax/vmax, umin/vmax]`.
 #[inline]
-fn compute_ao_light<B: Block>(
+fn compute_ao<B: Block>(
     data: &[B],
+    classes: &[u8],
     n_idx: usize,
     u_stride: isize,
     v_stride: isize,
     ao_face: AlignedFace,
-) -> ([u8; 4], [<B::Light as Light>::Average; 4]) {
-    // Load all 9 neighbors in the face-normal plane once.
-    let get = |du: isize, dv: isize| -> &B {
-        unsafe { data.get_unchecked((n_idx as isize + du + dv) as usize) }
+) -> [u8; 4] {
+    // Whether the neighbor at this offset in the face-normal plane darkens.
+    let ao_opaque = |du: isize, dv: isize| {
+        classed_ao_opaque(data, classes, (n_idx as isize + du + dv) as usize, ao_face)
     };
-
-    let neg_u = get(-u_stride, 0);
-    let pos_u = get(u_stride, 0);
-    let neg_v = get(0, -v_stride);
-    let pos_v = get(0, v_stride);
-    let neg_u_neg_v = get(-u_stride, -v_stride);
-    let pos_u_neg_v = get(u_stride, -v_stride);
-    let pos_u_pos_v = get(u_stride, v_stride);
-    let neg_u_pos_v = get(-u_stride, v_stride);
 
     // AO: does the material darken neighboring vertices?
     let ao = if B::Light::AO_ENABLED {
-        let ao_neg_u = shape_ao_opaque(neg_u, ao_face);
-        let ao_pos_u = shape_ao_opaque(pos_u, ao_face);
-        let ao_neg_v = shape_ao_opaque(neg_v, ao_face);
-        let ao_pos_v = shape_ao_opaque(pos_v, ao_face);
+        let ao_neg_u = ao_opaque(-u_stride, 0);
+        let ao_pos_u = ao_opaque(u_stride, 0);
+        let ao_neg_v = ao_opaque(0, -v_stride);
+        let ao_pos_v = ao_opaque(0, v_stride);
 
         let ao0 = if ao_neg_u && ao_neg_v {
             0
         } else {
-            3 - ao_neg_u as u8 - ao_neg_v as u8 - shape_ao_opaque(neg_u_neg_v, ao_face) as u8
+            3 - ao_neg_u as u8 - ao_neg_v as u8 - ao_opaque(-u_stride, -v_stride) as u8
         };
         let ao1 = if ao_pos_u && ao_neg_v {
             0
         } else {
-            3 - ao_pos_u as u8 - ao_neg_v as u8 - shape_ao_opaque(pos_u_neg_v, ao_face) as u8
+            3 - ao_pos_u as u8 - ao_neg_v as u8 - ao_opaque(u_stride, -v_stride) as u8
         };
         let ao2 = if ao_pos_u && ao_pos_v {
             0
         } else {
-            3 - ao_pos_u as u8 - ao_pos_v as u8 - shape_ao_opaque(pos_u_pos_v, ao_face) as u8
+            3 - ao_pos_u as u8 - ao_pos_v as u8 - ao_opaque(u_stride, v_stride) as u8
         };
         let ao3 = if ao_neg_u && ao_pos_v {
             0
         } else {
-            3 - ao_neg_u as u8 - ao_pos_v as u8 - shape_ao_opaque(neg_u_pos_v, ao_face) as u8
+            3 - ao_neg_u as u8 - ao_pos_v as u8 - ao_opaque(-u_stride, v_stride) as u8
         };
 
         [ao0, ao1, ao2, ao3]
@@ -1500,40 +1607,94 @@ fn compute_ao_light<B: Block>(
         [3; 4]
     };
 
-    (ao, compute_light(data, n_idx, u_stride, v_stride))
+    ao
 }
 
-/// The smooth-light half of [`compute_ao_light`], for a face whose AO is
-/// settled some other way. Same arguments, same vertex order.
-#[inline]
-fn compute_light<B: Block>(
-    data: &[B],
-    n_idx: usize,
-    u_stride: isize,
-    v_stride: isize,
-) -> [<B::Light as Light>::Average; 4] {
-    if !B::Light::LIGHT_ENABLED {
-        return Default::default();
+/// Smooth light at the vertices of the two planes a layer's faces sample —
+/// their neighbors' cells, and (for inset faces) their own — each vertex
+/// averaged once for all the faces around it rather than once by each.
+///
+/// A vertex averages the light of the four cells around it, which are the
+/// same four whichever face's corner it is; only the order differs, and
+/// [`Light::average`] doesn't depend on that.
+struct VertexLights<B: Block> {
+    /// Vertices along a side of a plane: one more than the cells.
+    side: usize,
+    /// The layer the entries are good for; any other stamp is stale.
+    stamp: u32,
+    /// Both planes' vertices, `[plane][v][u]`: their stamp and average.
+    entries: Vec<(u32, <B::Light as Light>::Average)>,
+}
+
+impl<B: Block> VertexLights<B> {
+    fn new(size: usize) -> Self {
+        let side = size + 1;
+        Self {
+            side,
+            stamp: 0,
+            entries: vec![(0, Default::default()); 2 * side * side],
+        }
     }
-    let light = |du: isize, dv: isize| unsafe {
-        data.get_unchecked((n_idx as isize + du + dv) as usize)
-            .light()
-    };
-    // Smooth light: each vertex averages light from the 4 surrounding
-    // voxels unconditionally. Unlike AO, we do not exclude opaque
-    // neighbors — their stored light values already reflect blockage,
-    // and excluding them would cause different blocks sharing a vertex
-    // to compute different averages (since one block's "side" neighbor
-    // is another's "corner"), producing visible discontinuities.
-    let cl = light(0, 0);
-    let (neg_u, pos_u) = (light(-u_stride, 0), light(u_stride, 0));
-    let (neg_v, pos_v) = (light(0, -v_stride), light(0, v_stride));
-    [
-        B::Light::average(&[cl, neg_u, neg_v, light(-u_stride, -v_stride)]),
-        B::Light::average(&[cl, pos_u, neg_v, light(u_stride, -v_stride)]),
-        B::Light::average(&[cl, pos_u, pos_v, light(u_stride, v_stride)]),
-        B::Light::average(&[cl, neg_u, pos_v, light(-u_stride, v_stride)]),
-    ]
+
+    /// Forgets every average, for the next layer's planes.
+    fn next_layer(&mut self) {
+        self.stamp = self.stamp.wrapping_add(1);
+        if self.stamp == 0 {
+            self.entries.fill((0, Default::default()));
+            self.stamp = 1;
+        }
+    }
+
+    /// Smooth light at the corners of the cell at `(u, v)` (inner, in the
+    /// face's tangents) of `plane` — 0 for the layer's own cells, 1 for its
+    /// neighbors' — whose index in `data` is `at`. In mask-local vertex
+    /// order, `[umin/vmin, umax/vmin, umax/vmax, umin/vmax]`.
+    ///
+    /// Each vertex averages light from the 4 surrounding voxels
+    /// unconditionally. Unlike AO, opaque neighbors are not excluded: their
+    /// stored light values already reflect blockage, and excluding them
+    /// would cause different blocks sharing a vertex to compute different
+    /// averages (since one block's "side" neighbor is another's "corner"),
+    /// producing visible discontinuities.
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn corners(
+        &mut self,
+        data: &[B],
+        plane: usize,
+        u: usize,
+        v: usize,
+        at: usize,
+        u_stride: isize,
+        v_stride: isize,
+    ) -> [<B::Light as Light>::Average; 4] {
+        if !B::Light::LIGHT_ENABLED {
+            return Default::default();
+        }
+        // SAFETY: `at` is a cell inside the padding ring, so its neighbors
+        // in the plane are in the padded chunk.
+        let light = |du: isize, dv: isize| unsafe {
+            data.get_unchecked((at as isize + du + dv) as usize).light()
+        };
+        let (side, stamp) = (self.side, self.stamp);
+        let mut vertex = |du: isize, dv: isize| {
+            let vertex_u = u + (du > 0) as usize;
+            let vertex_v = v + (dv > 0) as usize;
+            let (entry_stamp, average) =
+                &mut self.entries[(plane * side + vertex_v) * side + vertex_u];
+            if *entry_stamp != stamp {
+                *entry_stamp = stamp;
+                *average = B::Light::average(&[
+                    light(0, 0),
+                    light(du * u_stride, 0),
+                    light(0, dv * v_stride),
+                    light(du * u_stride, dv * v_stride),
+                ]);
+            }
+            *average
+        };
+        [vertex(-1, -1), vertex(1, -1), vertex(1, 1), vertex(-1, 1)]
+    }
 }
 
 /// Moves per-vertex AO and light, computed at a cell face's four corners,
@@ -1817,9 +1978,13 @@ fn emit_cross_quads<B: Block>(
 /// whose offsets vary along a direction never has an identical neighbor
 /// there in the first place.
 #[allow(clippy::too_many_arguments)]
+///
+/// `rows` says which cells of `mask` hold this layer's entries, a bit per
+/// cell; the others hold whatever an earlier layer left. Clears every bit.
 #[inline]
 fn emit_mask<B: Block, S: ChunkShape>(
-    mask: &mut [[Option<MaskEntry<B>>; S::SIZE]; S::SIZE],
+    mask: &[[MaskEntry<B>; S::SIZE]; S::SIZE],
+    rows: &mut [u64; S::SIZE],
     greedy: bool,
     out: &mut Vec<Quad<B::Light>>,
     normal_idx: usize,
@@ -1832,15 +1997,9 @@ fn emit_mask<B: Block, S: ChunkShape>(
 {
     let ft = FULL_THICKNESS as u8;
     for v in 0..S::SIZE {
-        let mut u = 0;
-        while u < S::SIZE {
-            let entry = match mask[v][u] {
-                Some(e) => e,
-                None => {
-                    u += 1;
-                    continue;
-                }
-            };
+        while rows[v] != 0 {
+            let u = rows[v].trailing_zeros() as usize;
+            let entry = mask[v][u];
 
             let mut width = 1;
             let mut height = 1;
@@ -1855,7 +2014,10 @@ fn emit_mask<B: Block, S: ChunkShape>(
                 // Find widest run of identical entries along u.
                 // Sub-block u extents (slabs, stairs) must not merge along u.
                 if entry.u_intra_extent == ft && flat_u {
-                    while u + width < S::SIZE && mask[v][u + width] == Some(entry) {
+                    while u + width < S::SIZE
+                        && rows[v] & (1 << (u + width)) != 0
+                        && mask[v][u + width] == entry
+                    {
                         width += 1;
                     }
                 }
@@ -1863,9 +2025,13 @@ fn emit_mask<B: Block, S: ChunkShape>(
                 // Extend the run along v.
                 // Sub-block v extents (slabs, stairs) must not merge along v.
                 if entry.v_intra_extent == ft && flat_v {
+                    let run = ((1u64 << width) - 1) << u;
                     'extend: while v + height < S::SIZE {
+                        if rows[v + height] & run != run {
+                            break;
+                        }
                         for du in 0..width {
-                            if mask[v + height][u + du] != Some(entry) {
+                            if mask[v + height][u + du] != entry {
                                 break 'extend;
                             }
                         }
@@ -1875,10 +2041,9 @@ fn emit_mask<B: Block, S: ChunkShape>(
             }
 
             // Clear the merged region.
-            for dv in 0..height {
-                for du in 0..width {
-                    mask[v + dv][u + du] = None;
-                }
+            let run = ((1u64 << width) - 1) << u;
+            for row in &mut rows[v..v + height] {
+                *row &= !run;
             }
 
             out.push(emit_quad(
@@ -1893,7 +2058,6 @@ fn emit_mask<B: Block, S: ChunkShape>(
                 height as u32,
                 face,
             ));
-            u += width;
         }
     }
 }
@@ -1972,14 +2136,79 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
     let ft = FULL_THICKNESS as u8;
     let data = &chunk.data;
 
-    // Masks are hoisted outside the layer loop. The build phase overwrites
-    // every cell unconditionally so previous values do not matter. Three
-    // per layer: the shape's quad, the second quad a stair shows on some
-    // faces, and the fluid standing in a solid's cell. The second two are
-    // sparse in practice and cost a `None` per cell when unused.
-    let mut mask: [[Option<MaskEntry<B>>; S::SIZE]; S::SIZE] = [[None; S::SIZE]; S::SIZE];
-    let mut extra: [[Option<MaskEntry<B>>; S::SIZE]; S::SIZE] = [[None; S::SIZE]; S::SIZE];
-    let mut overlay: [[Option<MaskEntry<B>>; S::SIZE]; S::SIZE] = [[None; S::SIZE]; S::SIZE];
+    // Masks are hoisted outside the layer loop. Three per layer: the shape's
+    // quad, the second quad a stair shows on some faces, and the fluid
+    // standing in a solid's cell.
+    //
+    // Which cells hold this layer's entries is a bit per cell, kept beside
+    // each mask; the others hold whatever an earlier layer left, which is
+    // never read. So the build phase writes only the cells that show a face
+    // — most cells are air or buried, and a `MaskEntry` is wide enough that
+    // writing an empty one over every cell of three masks was a fifth of
+    // meshing — and the emit phase visits only those.
+    let blank = MaskEntry {
+        block: data[0],
+        normal_pos: 0,
+        u_intra_offset: 0,
+        u_intra_extent: 0,
+        v_intra_offset: 0,
+        v_intra_extent: 0,
+        corner_offsets: [0; 4],
+        ao: [0; 4],
+        light: Default::default(),
+    };
+    let mut mask: [[MaskEntry<B>; S::SIZE]; S::SIZE] = [[blank; S::SIZE]; S::SIZE];
+    let mut extra: [[MaskEntry<B>; S::SIZE]; S::SIZE] = [[blank; S::SIZE]; S::SIZE];
+    let mut overlay: [[MaskEntry<B>; S::SIZE]; S::SIZE] = [[blank; S::SIZE]; S::SIZE];
+
+    // Each cell classified once (see `SILENT` and the rest), so the six
+    // faces' passes can pass over the cells that show no face without asking
+    // the block about itself, and its neighbor, face after face. Most cells
+    // are one or the other.
+    let classify = |block: &B| {
+        let shape = block.shape();
+        let cull_mode = block.cull_mode();
+        let fluid = B::FLUID_ENABLED && block.fluid().is_some();
+        let mut class = 0;
+        if !fluid && (!cull_mode.is_renderable() || matches!(shape, Shape::Cross(_))) {
+            class |= SILENT;
+        }
+        if matches!(shape, Shape::WholeBlock) {
+            if cull_mode.is_renderable() && !fluid {
+                class |= WHOLE;
+            }
+            if matches!(cull_mode, CullMode::Opaque) {
+                class |= WHOLE_OPAQUE;
+            }
+        }
+        if matches!(shape, Shape::Cross(_)) && cull_mode.is_renderable() {
+            class |= CROSS;
+        }
+        if B::Light::AO_ENABLED {
+            if !block.ao_opaque() {
+                class |= AO_NEVER;
+            } else if matches!(shape, Shape::WholeBlock) {
+                class |= AO_ALWAYS;
+            }
+        }
+        class
+    };
+    let mut classes = [0u8; S::PADDED_VOLUME];
+    // The cells with `CROSS`, for the cross pass to find without a search.
+    let mut crosses = Vec::new();
+    // Runs of one block (air, stone) are long, and a block is its class.
+    let mut previous = (data[0], classify(&data[0]));
+    for (i, (class, block)) in classes.iter_mut().zip(data.iter()).enumerate() {
+        if *block != previous.0 {
+            previous = (*block, classify(block));
+        }
+        *class = previous.1;
+        if previous.1 & CROSS != 0 {
+            crosses.push(i);
+        }
+    }
+    let row_bits = RowBits::new::<S>(&classes);
+    let vertex_lights = std::cell::RefCell::new(VertexLights::<B>::new(S::SIZE));
 
     for face in AlignedFace::ALL {
         let (normal_idx, u_idx, v_idx) = face_axis_indices(face);
@@ -1994,11 +2223,23 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
         for layer in 0..S::SIZE {
             let layer_base = (PADDING + layer) * n_stride + PADDING * u_stride + PADDING * v_stride;
 
+            vertex_lights.borrow_mut().next_layer();
+
+            // Which rows of each mask this layer writes.
+            let mut mask_rows = [0u64; S::SIZE];
+            let mut extra_rows = [0u64; S::SIZE];
+            let mut overlay_rows = [0u64; S::SIZE];
+
             // Build the 2D masks for this layer.
             let mut v_base = layer_base;
             for v in 0..S::SIZE {
-                let mut idx = v_base;
-                for u in 0..S::SIZE {
+                // Only the cells that may show a face; the rest of the row
+                // shows none (see `SILENT`).
+                let mut cells = row_bits.cells(face, layer, v, S::SIZE);
+                while cells != 0 {
+                    let u = cells.trailing_zeros() as usize;
+                    cells &= cells - 1;
+                    let idx = v_base + u * u_stride;
                     debug_assert!(idx < data.len());
                     let n_idx = (idx as isize + neighbor_stride) as usize;
                     debug_assert!(n_idx < data.len());
@@ -2187,12 +2428,17 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
                             let shaded = overlay || !is_ramp_slope;
                             let rect = entry_rect(e);
                             let sample = |at: usize| {
-                                let (u, v) = (u_stride as isize, v_stride as isize);
-                                let (ao, light) = if shaded {
-                                    compute_ao_light(data, at, u, v, ao_face)
+                                let (us, vs) = (u_stride as isize, v_stride as isize);
+                                let ao = if shaded {
+                                    compute_ao(data, &classes, at, us, vs, ao_face)
                                 } else {
-                                    ([3; 4], compute_light(data, at, u, v))
+                                    [3; 4]
                                 };
+                                // The cell's own plane, or its neighbor's.
+                                let plane = (at != idx) as usize;
+                                let light = vertex_lights
+                                    .borrow_mut()
+                                    .corners(data, plane, u, v, at, us, vs);
                                 // Sampled at the cell's corners; this quad
                                 // may only cover part of the cell.
                                 resample_to_rect::<B>(ao, light, &rect)
@@ -2222,18 +2468,26 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
                         }
                     }
 
-                    mask[v][u] = entry;
-                    extra[v][u] = second;
-                    overlay[v][u] = fluid_entry;
-
-                    idx += u_stride;
+                    if let Some(entry) = entry {
+                        mask[v][u] = entry;
+                        mask_rows[v] |= 1 << u;
+                    }
+                    if let Some(second) = second {
+                        extra[v][u] = second;
+                        extra_rows[v] |= 1 << u;
+                    }
+                    if let Some(fluid_entry) = fluid_entry {
+                        overlay[v][u] = fluid_entry;
+                        overlay_rows[v] |= 1 << u;
+                    }
                 }
                 v_base += v_stride;
             }
 
             // Emit phase (with optional greedy merging).
             emit_mask::<B, S>(
-                &mut mask,
+                &mask,
+                &mut mask_rows,
                 greedy,
                 &mut quads.faces[face.index()],
                 normal_idx,
@@ -2243,7 +2497,8 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
                 face,
             );
             emit_mask::<B, S>(
-                &mut extra,
+                &extra,
+                &mut extra_rows,
                 greedy,
                 &mut quads.faces[face.index()],
                 normal_idx,
@@ -2254,7 +2509,8 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
             );
             if B::FLUID_ENABLED {
                 emit_mask::<B, S>(
-                    &mut overlay,
+                    &overlay,
+                    &mut overlay_rows,
                     greedy,
                     &mut quads.fluid[face.index()],
                     normal_idx,
@@ -2269,18 +2525,43 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
 
     // Cross-block pass: for each merge axis, scan columns along that
     // axis and merge consecutive identical cross blocks.
+    if crosses.is_empty() {
+        return;
+    }
     let axis_strides = [1usize, S::PADDED, S::PADDED * S::PADDED];
+    let planes = |merge_axis: usize| match merge_axis {
+        0 => (1, 2), // merge along X, iterate YZ
+        1 => (0, 2), // merge along Y, iterate XZ
+        _ => (0, 1), // merge along Z, iterate XY
+    };
+
+    // Which columns along each merge axis hold a cross merging along it:
+    // the rest are passed over.
+    let mut cross_columns = vec![false; 3 * S::SIZE * S::SIZE];
+    for &idx in &crosses {
+        let p = S::PADDED;
+        let pos = [idx % p, idx / p % p, idx / (p * p)];
+        if pos.iter().any(|&c| c < PADDING || c >= PADDING + S::SIZE) {
+            continue;
+        }
+        if let Shape::Cross(info) = data[idx].shape() {
+            let merge_axis = info.face.axis().index();
+            let (plane_a, plane_b) = planes(merge_axis);
+            cross_columns[(merge_axis * S::SIZE + pos[plane_b] - PADDING) * S::SIZE
+                + pos[plane_a]
+                - PADDING] = true;
+        }
+    }
 
     for merge_axis in 0..3usize {
-        let (plane_a, plane_b) = match merge_axis {
-            0 => (1, 2), // merge along X, iterate YZ
-            1 => (0, 2), // merge along Y, iterate XZ
-            _ => (0, 1), // merge along Z, iterate XY
-        };
+        let (plane_a, plane_b) = planes(merge_axis);
         let merge_stride = axis_strides[merge_axis];
 
         for pb in 0..S::SIZE {
             for pa in 0..S::SIZE {
+                if !cross_columns[(merge_axis * S::SIZE + pb) * S::SIZE + pa] {
+                    continue;
+                }
                 let mut pos = [0usize; 3];
                 pos[plane_a] = pa + PADDING;
                 pos[plane_b] = pb + PADDING;
@@ -2290,6 +2571,10 @@ pub fn mesh_chunk_into<B: Block, S: ChunkShape>(
                 let mut m = 0;
                 while m < S::SIZE {
                     let idx = col_base + m * merge_stride;
+                    if unsafe { *classes.get_unchecked(idx) } & CROSS == 0 {
+                        m += 1;
+                        continue;
+                    }
                     let block = unsafe { data.get_unchecked(idx) };
 
                     let info = match block.shape() {

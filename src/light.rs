@@ -24,6 +24,15 @@ pub trait Light: Copy + PartialEq + Eq + Debug + Default {
     type Average: Copy + Default + Debug + PartialEq;
 
     /// Average the given light values.
+    ///
+    /// Must not depend on the order of `values`, down to the bit. A vertex's
+    /// light is the average of the cells around it, and the mesher works it
+    /// out once and hands it to every face that shares the vertex — each of
+    /// which would list those cells in a different order. An average that
+    /// varied with the order would make the result depend on which face
+    /// asked first. Summing in integers before dividing, as the provided
+    /// implementations do, is order-independent; summing floats generally
+    /// isn't.
     fn average(values: &[Self]) -> Self::Average;
 
     /// Blend four corner averages by weights that sum to one.
